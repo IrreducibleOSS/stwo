@@ -195,14 +195,16 @@ where
 }
 
 /// Projective fraction.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Fraction<N, D> {
     pub numerator: N,
     pub denominator: D,
 }
 
+impl<N: Copy, D: Copy> Copy for Fraction<N, D> {}
+
 impl<N, D> Fraction<N, D> {
-    pub const fn new(numerator: N, denominator: D) -> Self {
+    pub fn new(numerator: N, denominator: D) -> Self {
         Self {
             numerator,
             denominator,
@@ -210,15 +212,17 @@ impl<N, D> Fraction<N, D> {
     }
 }
 
-impl<N, D: Add<Output = D> + Add<N, Output = D> + Mul<N, Output = D> + Mul<Output = D> + Clone> Add
-    for Fraction<N, D>
+impl<
+        N: Clone,
+        D: Add<Output = D> + Add<N, Output = D> + Mul<N, Output = D> + Mul<Output = D> + Clone,
+    > Add for Fraction<N, D>
 {
     type Output = Fraction<D, D>;
 
     fn add(self, rhs: Self) -> Fraction<D, D> {
         Fraction {
-            numerator: rhs.denominator.clone() * self.numerator
-                + self.denominator.clone() * rhs.numerator,
+            numerator: rhs.denominator.clone() * self.numerator.clone()
+                + self.denominator.clone() * rhs.numerator.clone(),
             denominator: self.denominator * rhs.denominator,
         }
     }
@@ -256,7 +260,7 @@ pub struct Reciprocal<T> {
 }
 
 impl<T> Reciprocal<T> {
-    pub const fn new(x: T) -> Self {
+    pub fn new(x: T) -> Self {
         Self { x }
     }
 }

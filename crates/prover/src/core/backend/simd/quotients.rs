@@ -1,7 +1,5 @@
 use itertools::{izip, zip_eq, Itertools};
 use num_traits::Zero;
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 use tracing::{span, Level};
 
 use super::cm31::PackedCM31;
@@ -10,9 +8,8 @@ use super::domain::CircleDomainBitRevIterator;
 use super::m31::{PackedBaseField, LOG_N_LANES, N_LANES};
 use super::qm31::PackedSecureField;
 use super::SimdBackend;
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::cpu::quotients::{batch_random_coeffs, column_line_coeffs};
-use crate::core::backend::CpuBackend;
+use crate::core::backend::{Column, CpuBackend};
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::{SecureColumnByCoords, SECURE_EXTENSION_DEGREE};
@@ -20,6 +17,7 @@ use crate::core::fields::FieldExpOps;
 use crate::core::pcs::quotients::{ColumnSampleBatch, QuotientOps};
 use crate::core::poly::circle::{CircleDomain, CircleEvaluation, PolyOps, SecureEvaluation};
 use crate::core::poly::BitReversedOrder;
+use crate::core::utils::bit_reverse;
 
 pub struct QuotientConstants {
     pub line_coeffs: Vec<Vec<(SecureField, SecureField, SecureField)>>,
@@ -116,17 +114,10 @@ fn accumulate_quotients_on_subdomain(
     let quotient_constants = quotient_constants(sample_batches, random_coeff, subdomain);
 
     let span = span!(Level::INFO, "Quotient accumulation").entered();
-    let quad_rows = CircleDomainBitRevIterator::new(subdomain)
+    for (quad_row, points) in CircleDomainBitRevIterator::new(subdomain)
         .array_chunks::<4>()
-        .collect_vec();
-
-    #[cfg(not(feature = "parallel"))]
-    let iter = quad_rows.iter().zip(values.chunks_mut(4)).enumerate();
-
-    #[cfg(feature = "parallel")]
-    let iter = quad_rows.par_iter().zip(values.chunks_mut(4)).enumerate();
-
-    iter.for_each(|(quad_row, (points, mut values_dst))| {
+        .enumerate()
+    {
         // TODO(andrew): Spapini said: Use optimized domain iteration. Is there a better way to do
         // this?
         let (y01, _) = points[0].y.deinterleave(points[1].y);
@@ -139,13 +130,11 @@ fn accumulate_quotients_on_subdomain(
             quad_row,
             spaced_ys,
         );
-        unsafe {
-            values_dst.set_packed(0, row_accumulator[0]);
-            values_dst.set_packed(1, row_accumulator[1]);
-            values_dst.set_packed(2, row_accumulator[2]);
-            values_dst.set_packed(3, row_accumulator[3]);
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..4 {
+            unsafe { values.set_packed((quad_row << 2) + i, row_accumulator[i]) };
         }
-    });
+    }
     span.exit();
     let span = span!(Level::INFO, "Quotient extension").entered();
 
@@ -226,14 +215,6 @@ fn denominator_inverses(
 ) -> Vec<CM31Column> {
     // We want a P to be on a line that passes through a point Pr + uPi in QM31^2, and its conjugate
     // Pr - uPi. Thus, Pr - P is parallel to Pi. Or, (Pr - P).x * Pi.y - (Pr - P).y * Pi.x = 0.
-    let domain_points = CircleDomainBitRevIterator::new(domain).collect_vec();
-
-    #[cfg(not(feature = "parallel"))]
-    let iter = domain_points.into_iter();
-
-    #[cfg(feature = "parallel")]
-    let iter = domain_points.par_iter();
-
     let flat_denominators: CM31Column = sample_batches
         .iter()
         .flat_map(|sample_batch| {
@@ -245,15 +226,21 @@ fn denominator_inverses(
 
             // Line equation through pr +-u pi.
             // (p-pr)*
-            iter.clone()
+            CircleDomainBitRevIterator::new(domain)
                 .map(|points| (prx - points.x) * piy - (pry - points.y) * pix)
-                .collect::<Vec<_>>()
+                .collect_vec()
         })
         .collect();
 
-    let flat_denominator_inverses = PackedCM31::batch_inverse(&flat_denominators.data);
+    let mut flat_denominator_inverses =
+        unsafe { CM31Column::uninitialized(flat_denominators.len()) };
+    FieldExpOps::batch_inverse(
+        &flat_denominators.data,
+        &mut flat_denominator_inverses.data[..],
+    );
 
     flat_denominator_inverses
+        .data
         .chunks(domain.size() / N_LANES)
         .map(|denominator_inverses| denominator_inverses.iter().copied().collect())
         .collect()
@@ -299,13 +286,13 @@ mod tests {
         let e1: BaseColumn = (0..small_domain.size())
             .map(|i| BaseField::from(2 * i))
             .collect();
-        let polys = [
+        let polys = vec![
             CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(small_domain, e0)
                 .interpolate(),
             CircleEvaluation::<SimdBackend, BaseField, BitReversedOrder>::new(small_domain, e1)
                 .interpolate(),
         ];
-        let columns = [polys[0].evaluate(domain), polys[1].evaluate(domain)];
+        let columns = vec![polys[0].evaluate(domain), polys[1].evaluate(domain)];
         let random_coeff = qm31!(1, 2, 3, 4);
         let a = polys[0].eval_at_point(SECURE_FIELD_CIRCLE_GEN);
         let b = polys[1].eval_at_point(SECURE_FIELD_CIRCLE_GEN);

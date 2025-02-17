@@ -14,7 +14,7 @@ use crate::core::vcs::prover::MerkleProver;
 pub type TestData<H> = (
     BTreeMap<u32, Vec<usize>>,
     MerkleDecommitment<H>,
-    Vec<BaseField>,
+    Vec<Vec<BaseField>>,
     MerkleVerifier<H>,
 );
 
@@ -50,8 +50,11 @@ where
         queries.insert(log_size, layer_queries);
     }
 
-    let (values, decommitment) = merkle.decommit(&queries, cols.iter().collect_vec());
+    let (values, decommitment) = merkle.decommit(queries.clone(), cols.iter().collect_vec());
 
-    let verifier = MerkleVerifier::new(merkle.root(), log_sizes);
+    let verifier = MerkleVerifier {
+        root: merkle.root(),
+        column_log_sizes: log_sizes,
+    };
     (queries, decommitment, values, verifier)
 }

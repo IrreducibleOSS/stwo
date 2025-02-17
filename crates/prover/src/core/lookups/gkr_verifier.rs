@@ -223,7 +223,7 @@ pub struct GkrMask {
 }
 
 impl GkrMask {
-    pub const fn new(columns: Vec<[SecureField; 2]>) -> Self {
+    pub fn new(columns: Vec<[SecureField; 2]>) -> Self {
         Self { columns }
     }
 

@@ -1,20 +1,19 @@
 use num_traits::Zero;
 
 use super::CpuBackend;
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::{Col, ColumnOps};
 use crate::core::circle::{CirclePoint, Coset};
 use crate::core::fft::{butterfly, ibutterfly};
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
-use crate::core::fields::{batch_inverse_in_place, ExtensionOf};
+use crate::core::fields::{ExtensionOf, FieldExpOps};
 use crate::core::poly::circle::{
     CanonicCoset, CircleDomain, CircleEvaluation, CirclePoly, PolyOps,
 };
 use crate::core::poly::twiddles::TwiddleTree;
 use crate::core::poly::utils::{domain_line_twiddles_from_tree, fold};
 use crate::core::poly::BitReversedOrder;
-use crate::core::utils::coset_order_to_circle_domain_order;
+use crate::core::utils::{bit_reverse, coset_order_to_circle_domain_order};
 
 impl PolyOps for CpuBackend {
     type Twiddles = Vec<BaseField>;
@@ -172,7 +171,7 @@ impl PolyOps for CpuBackend {
             .array_chunks::<CHUNK_SIZE>()
             .zip(itwiddles.array_chunks_mut::<CHUNK_SIZE>())
             .for_each(|(src, dst)| {
-                batch_inverse_in_place(src, dst);
+                BaseField::batch_inverse(src, dst);
             });
 
         TwiddleTree {

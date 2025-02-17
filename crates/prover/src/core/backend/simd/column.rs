@@ -18,6 +18,19 @@ use crate::core::fields::cm31::CM31;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::{SecureColumnByCoords, SECURE_EXTENSION_DEGREE};
+use crate::core::fields::{FieldExpOps, FieldOps};
+
+impl FieldOps<BaseField> for SimdBackend {
+    fn batch_inverse(column: &BaseColumn, dst: &mut BaseColumn) {
+        PackedBaseField::batch_inverse(&column.data, &mut dst.data);
+    }
+}
+
+impl FieldOps<SecureField> for SimdBackend {
+    fn batch_inverse(column: &SecureColumn, dst: &mut SecureColumn) {
+        PackedSecureField::batch_inverse(&column.data, &mut dst.data);
+    }
+}
 
 /// An efficient structure for storing and operating on a arbitrary number of [`BaseField`] values.
 #[derive(Clone, Debug)]
@@ -49,13 +62,6 @@ impl BaseColumn {
 
     pub fn from_cpu(values: Vec<BaseField>) -> Self {
         values.into_iter().collect()
-    }
-
-    pub fn from_simd(values: Vec<PackedBaseField>) -> Self {
-        Self {
-            length: values.len() * N_LANES,
-            data: values,
-        }
     }
 
     /// Returns a vector of `BaseColumnMutSlice`s, each mutably owning
@@ -201,7 +207,7 @@ impl FromIterator<PackedCM31> for CM31Column {
 /// A mutable slice of a BaseColumn.
 pub struct BaseColumnMutSlice<'a>(pub &'a mut [PackedBaseField]);
 
-impl BaseColumnMutSlice<'_> {
+impl<'a> BaseColumnMutSlice<'a> {
     pub fn at(&self, index: usize) -> BaseField {
         self.0[index / N_LANES].to_array()[index % N_LANES]
     }
@@ -317,7 +323,7 @@ impl FromIterator<PackedSecureField> for SecureColumn {
 /// A mutable slice of a SecureColumnByCoords.
 pub struct SecureColumnByCoordsMutSlice<'a>(pub [BaseColumnMutSlice<'a>; SECURE_EXTENSION_DEGREE]);
 
-impl SecureColumnByCoordsMutSlice<'_> {
+impl<'a> SecureColumnByCoordsMutSlice<'a> {
     /// # Safety
     ///
     /// `vec_index` must be a valid index.
@@ -351,7 +357,7 @@ pub struct VeryPackedSecureColumnByCoordsMutSlice<'a>(
     pub [VeryPackedBaseColumnMutSlice<'a>; SECURE_EXTENSION_DEGREE],
 );
 
-impl VeryPackedSecureColumnByCoordsMutSlice<'_> {
+impl<'a> VeryPackedSecureColumnByCoordsMutSlice<'a> {
     /// # Safety
     ///
     /// `vec_index` must be a valid index.
@@ -457,7 +463,7 @@ impl VeryPackedBaseColumn {
     /// # Safety
     ///
     /// The resulting pointer does not update the underlying `data`'s length.
-    pub const unsafe fn transform_under_ref(value: &BaseColumn) -> &Self {
+    pub unsafe fn transform_under_ref(value: &BaseColumn) -> &Self {
         &*(std::ptr::addr_of!(*value) as *const VeryPackedBaseColumn)
     }
 

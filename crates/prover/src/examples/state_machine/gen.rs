@@ -1,9 +1,8 @@
 use itertools::Itertools;
 use num_traits::{One, Zero};
 
-use super::components::{State, StateMachineElements, STATE_SIZE};
-use crate::constraint_framework::logup::LogupTraceGenerator;
-use crate::constraint_framework::Relation;
+use super::components::{State, STATE_SIZE};
+use crate::constraint_framework::logup::{LogupTraceGenerator, LookupElements};
 use crate::core::backend::simd::column::BaseColumn;
 use crate::core::backend::simd::m31::{PackedM31, LOG_N_LANES};
 use crate::core::backend::simd::qm31::PackedQM31;
@@ -52,14 +51,16 @@ pub fn gen_trace(
 }
 
 pub fn gen_interaction_trace(
+    n_rows: usize,
     trace: &ColumnVec<CircleEvaluation<SimdBackend, M31, BitReversedOrder>>,
     inc_index: usize,
-    lookup_elements: &StateMachineElements,
+    lookup_elements: &LookupElements<STATE_SIZE>,
 ) -> (
     ColumnVec<CircleEvaluation<SimdBackend, M31, BitReversedOrder>>,
-    QM31,
+    [QM31; 2],
 ) {
     let log_size = trace[0].domain.log_size();
+    assert!(n_rows <= 1 << log_size, "n_rows exceeds the trace size");
 
     let ones = PackedM31::broadcast(M31::one());
     let mut logup_gen = LogupTraceGenerator::new(log_size);
@@ -83,12 +84,11 @@ pub fn gen_interaction_trace(
     }
     col_gen.finalize_col();
 
-    logup_gen.finalize_last()
+    logup_gen.finalize_at([(1 << log_size) - 1, n_rows])
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::constraint_framework::Relation;
     use crate::core::backend::Column;
     use crate::core::fields::m31::M31;
     use crate::core::fields::qm31::QM31;
@@ -131,12 +131,13 @@ mod tests {
         let first_state_comb: QM31 = lookup_elements.combine(&first_state);
         let last_state_comb: QM31 = lookup_elements.combine(&last_state);
 
-        let (interaction_trace, claimed_sum) =
-            gen_interaction_trace(&trace, inc_index, &lookup_elements);
+        let (interaction_trace, [total_sum, claimed_sum]) =
+            gen_interaction_trace((1 << log_size) - 1, &trace, inc_index, &lookup_elements);
 
         assert_eq!(interaction_trace.len(), SECURE_EXTENSION_DEGREE); // One extension column.
+        assert_eq!(claimed_sum, total_sum);
         assert_eq!(
-            claimed_sum,
+            total_sum,
             first_state_comb.inverse() - last_state_comb.inverse()
         );
     }

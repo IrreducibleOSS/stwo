@@ -104,7 +104,7 @@ impl<F: Zero + Add<Output = F> + FieldExpOps + Sub<Output = F> + Neg<Output = F>
         }
     }
 
-    pub fn into_ef<EF: From<F>>(self) -> CirclePoint<EF> {
+    pub fn into_ef<EF: From<F>>(&self) -> CirclePoint<EF> {
         CirclePoint {
             x: self.x.clone().into(),
             y: self.y.clone().into(),
@@ -126,8 +126,7 @@ impl<F: Zero + Add<Output = F> + FieldExpOps + Sub<Output = F> + Neg<Output = F>
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        // TODO(ShaharS): Revert once Rust solves compiler [issue](https://github.com/rust-lang/rust/issues/134457).
-        let x = self.x.clone() * rhs.x.clone() + (-self.y.clone() * rhs.y.clone());
+        let x = self.x.clone() * rhs.x.clone() - self.y.clone() * rhs.y.clone();
         let y = self.x * rhs.y + self.y * rhs.x;
         Self { x, y }
     }
@@ -224,15 +223,15 @@ pub const SECURE_FIELD_CIRCLE_ORDER: u128 = P4 - 1;
 pub struct CirclePointIndex(pub usize);
 
 impl CirclePointIndex {
-    pub const fn zero() -> Self {
+    pub fn zero() -> Self {
         Self(0)
     }
 
-    pub const fn generator() -> Self {
+    pub fn generator() -> Self {
         Self(1)
     }
 
-    pub const fn reduce(self) -> Self {
+    pub fn reduce(self) -> Self {
         Self(self.0 & ((1 << M31_CIRCLE_LOG_ORDER) - 1))
     }
 
@@ -344,16 +343,16 @@ impl Coset {
     }
 
     /// Returns the size of the coset.
-    pub const fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         1 << self.log_size()
     }
 
     /// Returns the log size of the coset.
-    pub const fn log_size(&self) -> u32 {
+    pub fn log_size(&self) -> u32 {
         self.log_size
     }
 
-    pub const fn iter(&self) -> CosetIterator<CirclePoint<M31>> {
+    pub fn iter(&self) -> CosetIterator<CirclePoint<M31>> {
         CosetIterator {
             cur: self.initial,
             step: self.step,
@@ -361,7 +360,7 @@ impl Coset {
         }
     }
 
-    pub const fn iter_indices(&self) -> CosetIterator<CirclePointIndex> {
+    pub fn iter_indices(&self) -> CosetIterator<CirclePointIndex> {
         CosetIterator {
             cur: self.initial_index,
             step: self.step_size,
@@ -390,7 +389,7 @@ impl Coset {
             && *self == other.repeated_double(other.log_size - self.log_size)
     }
 
-    pub const fn initial(&self) -> CirclePoint<M31> {
+    pub fn initial(&self) -> CirclePoint<M31> {
         self.initial
     }
 

@@ -9,6 +9,7 @@ use super::secure_column::SECURE_EXTENSION_DEGREE;
 use super::{ComplexConjugate, FieldExpOps};
 use crate::core::fields::cm31::CM31;
 use crate::core::fields::m31::M31;
+use crate::core::tracing::trace_multiplication;
 use crate::{impl_extension_field, impl_field};
 
 pub const P4: u128 = 21267647892944572736998860269687930881; // (2 ** 31 - 1) ** 4
@@ -32,15 +33,15 @@ impl QM31 {
         )
     }
 
-    pub const fn from_m31(a: M31, b: M31, c: M31, d: M31) -> Self {
+    pub fn from_m31(a: M31, b: M31, c: M31, d: M31) -> Self {
         Self(CM31::from_m31(a, b), CM31::from_m31(c, d))
     }
 
-    pub const fn from_m31_array(array: [M31; SECURE_EXTENSION_DEGREE]) -> Self {
+    pub fn from_m31_array(array: [M31; SECURE_EXTENSION_DEGREE]) -> Self {
         Self::from_m31(array[0], array[1], array[2], array[3])
     }
 
-    pub const fn to_m31_array(self) -> [M31; SECURE_EXTENSION_DEGREE] {
+    pub fn to_m31_array(self) -> [M31; SECURE_EXTENSION_DEGREE] {
         [self.0 .0, self.0 .1, self.1 .0, self.1 .1]
     }
 
@@ -77,6 +78,7 @@ impl Mul for QM31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        trace_multiplication!(QM31);
         // (a + bu) * (c + du) = (ac + rbd) + (ad + bc)u.
         Self(
             self.0 * rhs.0 + R * self.1 * rhs.1,

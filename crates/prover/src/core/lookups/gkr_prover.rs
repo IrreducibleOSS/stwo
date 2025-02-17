@@ -299,7 +299,7 @@ pub struct GkrMultivariatePolyOracle<'a, B: GkrOps> {
     pub lambda: SecureField,
 }
 
-impl<B: GkrOps> MultivariatePolyOracle for GkrMultivariatePolyOracle<'_, B> {
+impl<'a, B: GkrOps> MultivariatePolyOracle for GkrMultivariatePolyOracle<'a, B> {
     fn n_variables(&self) -> usize {
         self.input_layer.n_variables() - 1
     }

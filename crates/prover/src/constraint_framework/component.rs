@@ -9,13 +9,9 @@ use rayon::prelude::*;
 use tracing::{span, Level};
 
 use super::cpu_domain::CpuDomainEvaluator;
-use super::preprocessed_columns::PreProcessedColumnId;
-use super::{
-    EvalAtRow, InfoEvaluator, PointEvaluator, SimdDomainEvaluator, PREPROCESSED_TRACE_IDX,
-};
+use super::{EvalAtRow, InfoEvaluator, PointEvaluator, SimdDomainEvaluator};
 use crate::core::air::accumulation::{DomainEvaluationAccumulator, PointEvaluationAccumulator};
 use crate::core::air::{Component, ComponentProver, Trace};
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::simd::column::VeryPackedSecureColumnByCoords;
 use crate::core::backend::simd::m31::LOG_N_LANES;
 use crate::core::backend::simd::very_packed_m31::{VeryPackedBaseField, LOG_N_VERY_PACKED_ELEMS};
@@ -29,16 +25,9 @@ use crate::core::fields::FieldExpOps;
 use crate::core::pcs::{TreeSubspan, TreeVec};
 use crate::core::poly::circle::{CanonicCoset, CircleEvaluation, PolyOps};
 use crate::core::poly::BitReversedOrder;
-use crate::core::ColumnVec;
+use crate::core::{utils, ColumnVec};
 
 const CHUNK_SIZE: usize = 1;
-
-#[derive(Debug, Default)]
-enum PreprocessedColumnsAllocationMode {
-    #[default]
-    Dynamic,
-    Static,
-}
 
 // TODO(andrew): Docs.
 // TODO(andrew): Consider better location for this.
@@ -46,10 +35,6 @@ enum PreprocessedColumnsAllocationMode {
 pub struct TraceLocationAllocator {
     /// Mapping of tree index to next available column offset.
     next_tree_offsets: TreeVec<usize>,
-    /// Mapping of preprocessed columns to their index.
-    preprocessed_columns: Vec<PreProcessedColumnId>,
-    /// Controls whether the preprocessed columns are dynamic or static (default=Dynamic).
-    preprocessed_columns_allocation_mode: PreprocessedColumnsAllocationMode,
 }
 
 impl TraceLocationAllocator {
@@ -77,39 +62,12 @@ impl TraceLocationAllocator {
                 .collect(),
         )
     }
-
-    /// Create a new `TraceLocationAllocator` with fixed preprocessed columns setup.
-    pub fn new_with_preproccessed_columns(preprocessed_columns: &[PreProcessedColumnId]) -> Self {
-        assert!(
-            preprocessed_columns.iter().all_unique(),
-            "Duplicate preprocessed columns are not allowed!"
-        );
-        Self {
-            next_tree_offsets: Default::default(),
-            preprocessed_columns: preprocessed_columns.to_vec(),
-            preprocessed_columns_allocation_mode: PreprocessedColumnsAllocationMode::Static,
-        }
-    }
-
-    pub const fn preprocessed_columns(&self) -> &Vec<PreProcessedColumnId> {
-        &self.preprocessed_columns
-    }
-
-    // validates that `self.preprocessed_columns` is consistent with
-    // `preprocessed_columns`.
-    // I.e. preprocessed_columns[i] == self.preprocessed_columns[i].
-    // TODO(Gali): Change to only validating that this is a permutation (not necessarily the same
-    // order).
-    pub fn validate_preprocessed_columns(&self, preprocessed_columns: &[PreProcessedColumnId]) {
-        assert_eq!(self.preprocessed_columns, preprocessed_columns);
-    }
 }
 
 /// A component defined solely in means of the constraints framework.
-///
 /// Implementing this trait introduces implementations for [`Component`] and [`ComponentProver`] for
-/// the SIMD backend. Note that the constraint framework only supports components with columns of
-/// the same size.
+/// the SIMD backend.
+/// Note that the constraint framework only support components with columns of the same size.
 pub trait FrameworkEval {
     fn log_size(&self) -> u32;
 
@@ -119,54 +77,19 @@ pub trait FrameworkEval {
 }
 
 pub struct FrameworkComponent<C: FrameworkEval> {
-    pub(super) eval: C,
-    pub(super) trace_locations: TreeVec<TreeSubspan>,
-    pub(super) preprocessed_column_indices: Vec<usize>,
+    eval: C,
+    trace_locations: TreeVec<TreeSubspan>,
     info: InfoEvaluator,
-    claimed_sum: SecureField,
 }
 
 impl<E: FrameworkEval> FrameworkComponent<E> {
-    pub fn new(
-        location_allocator: &mut TraceLocationAllocator,
-        eval: E,
-        claimed_sum: SecureField,
-    ) -> Self {
-        let info = eval.evaluate(InfoEvaluator::new(eval.log_size(), vec![], claimed_sum));
+    pub fn new(location_allocator: &mut TraceLocationAllocator, eval: E) -> Self {
+        let info = eval.evaluate(InfoEvaluator::default());
         let trace_locations = location_allocator.next_for_structure(&info.mask_offsets);
-
-        let preprocessed_column_indices = info
-            .preprocessed_columns
-            .iter()
-            .map(|col| {
-                let next_column = location_allocator.preprocessed_columns.len();
-                if let Some(pos) = location_allocator
-                    .preprocessed_columns
-                    .iter()
-                    .position(|x| x.id == col.id)
-                {
-                    pos
-                } else {
-                    if matches!(
-                        location_allocator.preprocessed_columns_allocation_mode,
-                        PreprocessedColumnsAllocationMode::Static
-                    ) {
-                        panic!(
-                            "Preprocessed column {:?} is missing from static allocation",
-                            col
-                        );
-                    }
-                    location_allocator.preprocessed_columns.push(col.clone());
-                    next_column
-                }
-            })
-            .collect();
         Self {
             eval,
             trace_locations,
             info,
-            preprocessed_column_indices,
-            claimed_sum,
         }
     }
 
@@ -185,19 +108,10 @@ impl<E: FrameworkEval> Component for FrameworkComponent<E> {
     }
 
     fn trace_log_degree_bounds(&self) -> TreeVec<ColumnVec<u32>> {
-        let mut log_degree_bounds = self
-            .info
+        self.info
             .mask_offsets
             .as_ref()
-            .map(|tree_offsets| vec![self.eval.log_size(); tree_offsets.len()]);
-
-        log_degree_bounds[0] = self
-            .preprocessed_column_indices
-            .iter()
-            .map(|_| self.eval.log_size())
-            .collect();
-
-        log_degree_bounds
+            .map(|tree_offsets| vec![self.eval.log_size(); tree_offsets.len()])
     }
 
     fn mask_points(
@@ -213,31 +127,16 @@ impl<E: FrameworkEval> Component for FrameworkComponent<E> {
         })
     }
 
-    fn preproccessed_column_indices(&self) -> ColumnVec<usize> {
-        self.preprocessed_column_indices.clone()
-    }
-
     fn evaluate_constraint_quotients_at_point(
         &self,
         point: CirclePoint<SecureField>,
         mask: &TreeVec<ColumnVec<Vec<SecureField>>>,
         evaluation_accumulator: &mut PointEvaluationAccumulator,
     ) {
-        let preprocessed_mask = self
-            .preprocessed_column_indices
-            .iter()
-            .map(|idx| &mask[PREPROCESSED_TRACE_IDX][*idx])
-            .collect_vec();
-
-        let mut mask_points = mask.sub_tree(&self.trace_locations);
-        mask_points[PREPROCESSED_TRACE_IDX] = preprocessed_mask;
-
         self.eval.evaluate(PointEvaluator::new(
-            mask_points,
+            mask.sub_tree(&self.trace_locations),
             evaluation_accumulator,
             coset_vanishing(CanonicCoset::new(self.eval.log_size()).coset, point).inverse(),
-            self.eval.log_size(),
-            self.claimed_sum,
         ));
     }
 }
@@ -255,19 +154,8 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
         let eval_domain = CanonicCoset::new(self.max_constraint_log_degree_bound()).circle_domain();
         let trace_domain = CanonicCoset::new(self.eval.log_size());
 
-        let mut component_polys = trace.polys.sub_tree(&self.trace_locations);
-        component_polys[PREPROCESSED_TRACE_IDX] = self
-            .preprocessed_column_indices
-            .iter()
-            .map(|idx| &trace.polys[PREPROCESSED_TRACE_IDX][*idx])
-            .collect();
-
-        let mut component_evals = trace.evals.sub_tree(&self.trace_locations);
-        component_evals[PREPROCESSED_TRACE_IDX] = self
-            .preprocessed_column_indices
-            .iter()
-            .map(|idx| &trace.evals[PREPROCESSED_TRACE_IDX][*idx])
-            .collect();
+        let component_polys = trace.polys.sub_tree(&self.trace_locations);
+        let component_evals = trace.evals.sub_tree(&self.trace_locations);
 
         // Extend trace if necessary.
         // TODO: Don't extend when eval_size < committed_size. Instead, pick a good
@@ -293,7 +181,7 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
         let mut denom_inv = (0..1 << log_expand)
             .map(|i| coset_vanishing(trace_domain.coset(), eval_domain.at(i)).inverse())
             .collect_vec();
-        bit_reverse(&mut denom_inv);
+        utils::bit_reverse(&mut denom_inv);
 
         // Accumulator.
         let [mut accum] =
@@ -317,8 +205,6 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
                     &accum.random_coeff_powers,
                     trace_domain.log_size(),
                     eval_domain.log_size(),
-                    self.eval.log_size(),
-                    self.claimed_sum,
                 );
                 let row_res = self.eval.evaluate(eval).row_res;
 
@@ -344,11 +230,6 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
             .step_by(CHUNK_SIZE)
             .zip(col.chunks_mut(CHUNK_SIZE));
 
-        // Define any `self` values outside the loop to prevent the compiler thinking there is a
-        // `Sync` requirement on `Self`.
-        let self_eval = &self.eval;
-        let self_claimed_sum = self.claimed_sum;
-
         iter.for_each(|(chunk_idx, mut chunk)| {
             let trace_cols = trace.as_cols_ref().map_cols(|c| c.as_ref());
 
@@ -361,10 +242,8 @@ impl<E: FrameworkEval + Sync> ComponentProver<SimdBackend> for FrameworkComponen
                     &accum.random_coeff_powers,
                     trace_domain.log_size(),
                     eval_domain.log_size(),
-                    self_eval.log_size(),
-                    self_claimed_sum,
                 );
-                let row_res = self_eval.evaluate(eval).row_res;
+                let row_res = self.eval.evaluate(eval).row_res;
 
                 // Finalize row.
                 unsafe {

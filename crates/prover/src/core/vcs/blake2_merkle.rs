@@ -20,7 +20,7 @@ impl MerkleHasher for Blake2sMerkleHasher {
         if let Some((left, right)) = children_hashes {
             state = compress(
                 state,
-                unsafe { std::mem::transmute::<[Blake2sHash; 2], [u32; 16]>([left, right]) },
+                unsafe { std::mem::transmute([left, right]) },
                 0,
                 0,
                 0,
@@ -33,14 +33,7 @@ impl MerkleHasher for Blake2sMerkleHasher {
             .copied()
             .chain(std::iter::repeat(BaseField::zero()).take(rem));
         for chunk in padded_values.array_chunks::<16>() {
-            state = compress(
-                state,
-                unsafe { std::mem::transmute::<[BaseField; 16], [u32; 16]>(chunk) },
-                0,
-                0,
-                0,
-                0,
-            );
+            state = compress(state, unsafe { std::mem::transmute(chunk) }, 0, 0, 0, 0);
         }
         state.map(|x| x.to_le_bytes()).as_flattened().into()
     }
@@ -76,7 +69,7 @@ mod tests {
     fn test_merkle_success() {
         let (queries, decommitment, values, verifier) = prepare_merkle::<Blake2sMerkleHasher>();
 
-        verifier.verify(&queries, values, decommitment).unwrap();
+        verifier.verify(queries, values, decommitment).unwrap();
     }
 
     #[test]
@@ -85,7 +78,7 @@ mod tests {
         decommitment.hash_witness[4] = Blake2sHash::default();
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
+            verifier.verify(queries, values, decommitment).unwrap_err(),
             MerkleVerificationError::RootMismatch
         );
     }
@@ -93,10 +86,10 @@ mod tests {
     #[test]
     fn test_merkle_invalid_value() {
         let (queries, decommitment, mut values, verifier) = prepare_merkle::<Blake2sMerkleHasher>();
-        values[6] = BaseField::zero();
+        values[3][2] = BaseField::zero();
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
+            verifier.verify(queries, values, decommitment).unwrap_err(),
             MerkleVerificationError::RootMismatch
         );
     }
@@ -107,7 +100,7 @@ mod tests {
         decommitment.hash_witness.pop();
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
+            verifier.verify(queries, values, decommitment).unwrap_err(),
             MerkleVerificationError::WitnessTooShort
         );
     }
@@ -118,7 +111,7 @@ mod tests {
         decommitment.hash_witness.push(Blake2sHash::default());
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
+            verifier.verify(queries, values, decommitment).unwrap_err(),
             MerkleVerificationError::WitnessTooLong
         );
     }
@@ -126,22 +119,22 @@ mod tests {
     #[test]
     fn test_merkle_column_values_too_long() {
         let (queries, decommitment, mut values, verifier) = prepare_merkle::<Blake2sMerkleHasher>();
-        values.insert(3, BaseField::zero());
+        values[3].push(BaseField::zero());
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
-            MerkleVerificationError::TooManyQueriedValues
+            verifier.verify(queries, values, decommitment).unwrap_err(),
+            MerkleVerificationError::ColumnValuesTooLong
         );
     }
 
     #[test]
     fn test_merkle_column_values_too_short() {
         let (queries, decommitment, mut values, verifier) = prepare_merkle::<Blake2sMerkleHasher>();
-        values.remove(3);
+        values[3].pop();
 
         assert_eq!(
-            verifier.verify(&queries, values, decommitment).unwrap_err(),
-            MerkleVerificationError::TooFewQueriedValues
+            verifier.verify(queries, values, decommitment).unwrap_err(),
+            MerkleVerificationError::ColumnValuesTooShort
         );
     }
 

@@ -1,4 +1,4 @@
-//! A reference implementation of the BLAKE2s compression function, in pure Rust.
+//! An AVX512 implementation of the BLAKE2s compression function.
 //! Based on <https://github.com/oconnor663/blake2_simd/blob/master/blake2s/src/avx2.rs>.
 
 pub const IV: [u32; 8] = [
@@ -19,33 +19,33 @@ pub const SIGMA: [[u8; 16]; 10] = [
 ];
 
 #[inline(always)]
-const fn add(a: u32, b: u32) -> u32 {
+fn add(a: u32, b: u32) -> u32 {
     a.wrapping_add(b)
 }
 
 #[inline(always)]
-const fn xor(a: u32, b: u32) -> u32 {
+fn xor(a: u32, b: u32) -> u32 {
     a ^ b
 }
 
 #[inline(always)]
-const fn rot16(x: u32) -> u32 {
-    x.rotate_right(16)
+fn rot16(x: u32) -> u32 {
+    (x >> 16) | (x << (32 - 16))
 }
 
 #[inline(always)]
-const fn rot12(x: u32) -> u32 {
-    x.rotate_right(12)
+fn rot12(x: u32) -> u32 {
+    (x >> 12) | (x << (32 - 12))
 }
 
 #[inline(always)]
-const fn rot8(x: u32) -> u32 {
-    x.rotate_right(8)
+fn rot8(x: u32) -> u32 {
+    (x >> 8) | (x << (32 - 8))
 }
 
 #[inline(always)]
-const fn rot7(x: u32) -> u32 {
-    x.rotate_right(7)
+fn rot7(x: u32) -> u32 {
+    (x >> 7) | (x << (32 - 7))
 }
 
 #[inline(always)]

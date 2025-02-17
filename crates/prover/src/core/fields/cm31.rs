@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ComplexConjugate, FieldExpOps};
 use crate::core::fields::m31::M31;
+use crate::core::tracing::trace_multiplication;
 use crate::{impl_extension_field, impl_field};
 pub const P2: u64 = 4611686014132420609; // (2 ** 31 - 1) ** 2
 
@@ -24,7 +25,7 @@ impl CM31 {
         Self(M31::from_u32_unchecked(a), M31::from_u32_unchecked(b))
     }
 
-    pub const fn from_m31(a: M31, b: M31) -> CM31 {
+    pub fn from_m31(a: M31, b: M31) -> CM31 {
         Self(a, b)
     }
 }
@@ -45,6 +46,7 @@ impl Mul for CM31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        trace_multiplication!(CM31);
         // (a + bi) * (c + di) = (ac - bd) + (ad + bc)i.
         Self(
             self.0 * rhs.0 - self.1 * rhs.1,

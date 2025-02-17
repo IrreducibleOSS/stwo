@@ -7,22 +7,22 @@ use num_traits::Zero;
 
 use super::round::RoundElements;
 use super::N_ROUND_INPUT_FELTS;
+use crate::constraint_framework::logup::{LogupAtRow, LookupElements};
+use crate::constraint_framework::preprocessed_columns::PreprocessedColumn;
 use crate::constraint_framework::{
-    relation, EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator,
+    EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator, INTERACTION_TRACE_IDX,
 };
 use crate::core::fields::qm31::SecureField;
 
 pub type BlakeSchedulerComponent = FrameworkComponent<BlakeSchedulerEval>;
 
-relation!(BlakeElements, N_ROUND_INPUT_FELTS);
+pub type BlakeElements = LookupElements<N_ROUND_INPUT_FELTS>;
 
-#[allow(dead_code)]
 pub struct BlakeSchedulerEval {
     pub log_size: u32,
     pub blake_lookup_elements: BlakeElements,
     pub round_lookup_elements: RoundElements,
-    // TODO(first): validate logup.
-    pub claimed_sum: SecureField,
+    pub total_sum: SecureField,
 }
 impl FrameworkEval for BlakeSchedulerEval {
     fn log_size(&self) -> u32 {
@@ -32,10 +32,12 @@ impl FrameworkEval for BlakeSchedulerEval {
         self.log_size + 1
     }
     fn evaluate<E: EvalAtRow>(&self, mut eval: E) -> E {
+        let is_first = eval.get_preprocessed_column(PreprocessedColumn::IsFirst(self.log_size()));
         eval_blake_scheduler_constraints(
             &mut eval,
             &self.blake_lookup_elements,
             &self.round_lookup_elements,
+            LogupAtRow::new(INTERACTION_TRACE_IDX, self.total_sum, None, is_first),
         );
         eval
     }
@@ -46,9 +48,9 @@ pub fn blake_scheduler_info() -> InfoEvaluator {
         log_size: 1,
         blake_lookup_elements: BlakeElements::dummy(),
         round_lookup_elements: RoundElements::dummy(),
-        claimed_sum: SecureField::zero(),
+        total_sum: SecureField::zero(),
     };
-    component.evaluate(InfoEvaluator::empty())
+    component.evaluate(InfoEvaluator::default())
 }
 
 #[cfg(test)]
@@ -57,7 +59,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::constraint_framework::preprocessed_columns::IsFirst;
+    use crate::constraint_framework::preprocessed_columns::gen_is_first;
     use crate::constraint_framework::FrameworkEval;
     use crate::core::poly::circle::CanonicCoset;
     use crate::examples::blake::round::RoundElements;
@@ -82,25 +84,21 @@ mod tests {
 
         let round_lookup_elements = RoundElements::dummy();
         let blake_lookup_elements = BlakeElements::dummy();
-        let (interaction_trace, claimed_sum) = gen_interaction_trace(
+        let (interaction_trace, total_sum) = gen_interaction_trace(
             LOG_SIZE,
             lookup_data,
             &round_lookup_elements,
             &blake_lookup_elements,
         );
 
-        let trace = TreeVec::new(vec![
-            vec![IsFirst::new(LOG_SIZE).gen_column_simd()],
-            trace,
-            interaction_trace,
-        ]);
+        let trace = TreeVec::new(vec![trace, interaction_trace, vec![gen_is_first(LOG_SIZE)]]);
         let trace_polys = trace.map_cols(|c| c.interpolate());
 
         let component = BlakeSchedulerEval {
             log_size: LOG_SIZE,
             blake_lookup_elements,
             round_lookup_elements,
-            claimed_sum,
+            total_sum,
         };
         crate::constraint_framework::assert_constraints(
             &trace_polys,
@@ -108,7 +106,6 @@ mod tests {
             |eval| {
                 component.evaluate(eval);
             },
-            claimed_sum,
         )
     }
 }

@@ -9,10 +9,11 @@ use rayon::prelude::*;
 use super::{
     compute_first_twiddles, mul_twiddle, transpose_vecs, CACHED_FFT_LOG_SIZE, MIN_FFT_LOG_SIZE,
 };
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::simd::m31::{PackedBaseField, LOG_N_LANES};
 use crate::core::backend::simd::utils::UnsafeMut;
 use crate::core::circle::Coset;
+use crate::core::fields::FieldExpOps;
+use crate::core::utils::bit_reverse;
 use crate::parallel_iter;
 
 /// Performs an Inverse Circle Fast Fourier Transform (ICFFT) on the given values.
@@ -597,7 +598,7 @@ mod tests {
         let mut res = values;
         unsafe {
             ifft3(
-                transmute::<*mut PackedBaseField, *mut u32>(res.as_mut_ptr()),
+                transmute(res.as_mut_ptr()),
                 0,
                 LOG_N_LANES as usize,
                 twiddles0_dbl,
@@ -677,7 +678,7 @@ mod tests {
             let mut res = values.iter().copied().collect::<BaseColumn>();
             unsafe {
                 ifft_lower_with_vecwise(
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
+                    transmute(res.data.as_mut_ptr()),
                     &twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec(),
                     log_size as usize,
                     log_size as usize,
@@ -699,14 +700,11 @@ mod tests {
             let mut res = values.iter().copied().collect::<BaseColumn>();
             unsafe {
                 ifft(
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
+                    transmute(res.data.as_mut_ptr()),
                     &twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec(),
                     log_size as usize,
                 );
-                transpose_vecs(
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
-                    log_size as usize - 4,
-                );
+                transpose_vecs(transmute(res.data.as_mut_ptr()), log_size as usize - 4);
             }
 
             assert_eq!(res.to_cpu(), ground_truth_ifft(domain, &values));

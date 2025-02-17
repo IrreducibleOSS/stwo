@@ -1,12 +1,10 @@
-use num_traits::Zero;
+use num_traits::{One, Zero};
 
-use super::logup::LogupAtRow;
-use super::{EvalAtRow, INTERACTION_TRACE_IDX};
+use super::EvalAtRow;
 use crate::core::backend::{Backend, Column};
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::SECURE_EXTENSION_DEGREE;
-use crate::core::lookups::utils::Fraction;
 use crate::core::pcs::TreeVec;
 use crate::core::poly::circle::{CanonicCoset, CirclePoly};
 use crate::core::utils::circle_domain_order_to_coset_order;
@@ -16,24 +14,17 @@ pub struct AssertEvaluator<'a> {
     pub trace: &'a TreeVec<Vec<Vec<BaseField>>>,
     pub col_index: TreeVec<usize>,
     pub row: usize,
-    pub logup: LogupAtRow<Self>,
 }
 impl<'a> AssertEvaluator<'a> {
-    pub fn new(
-        trace: &'a TreeVec<Vec<Vec<BaseField>>>,
-        row: usize,
-        log_size: u32,
-        claimed_sum: SecureField,
-    ) -> Self {
+    pub fn new(trace: &'a TreeVec<Vec<Vec<BaseField>>>, row: usize) -> Self {
         Self {
             trace,
             col_index: TreeVec::new(vec![0; trace.len()]),
             row,
-            logup: LogupAtRow::new(INTERACTION_TRACE_IDX, claimed_sum, log_size),
         }
     }
 }
-impl EvalAtRow for AssertEvaluator<'_> {
+impl<'a> EvalAtRow for AssertEvaluator<'a> {
     type F = BaseField;
     type EF = SecureField;
 
@@ -54,31 +45,24 @@ impl EvalAtRow for AssertEvaluator<'_> {
 
     fn add_constraint<G>(&mut self, constraint: G)
     where
-        Self::EF: std::ops::Mul<G, Output = Self::EF> + From<G>,
+        Self::EF: std::ops::Mul<G, Output = Self::EF>,
     {
         // Cast to SecureField.
+        let res = SecureField::one() * constraint;
         // The constraint should be zero at the given row, since we are evaluating on the trace
         // domain.
-        assert_eq!(
-            Self::EF::from(constraint),
-            SecureField::zero(),
-            "row: {}",
-            self.row
-        );
+        assert_eq!(res, SecureField::zero(), "row: {}", self.row);
     }
 
     fn combine_ef(values: [Self::F; SECURE_EXTENSION_DEGREE]) -> Self::EF {
         SecureField::from_m31_array(values)
     }
-
-    super::logup_proxy!();
 }
 
 pub fn assert_constraints<B: Backend>(
     trace_polys: &TreeVec<Vec<CirclePoly<B>>>,
     trace_domain: CanonicCoset,
     assert_func: impl Fn(AssertEvaluator<'_>),
-    claimed_sum: SecureField,
 ) {
     let traces = trace_polys.as_ref().map(|tree| {
         tree.iter()
@@ -94,8 +78,7 @@ pub fn assert_constraints<B: Backend>(
             .collect()
     });
     for row in 0..trace_domain.size() {
-        let eval = AssertEvaluator::new(&traces, row, trace_domain.log_size(), claimed_sum);
-
+        let eval = AssertEvaluator::new(&traces, row);
         assert_func(eval);
     }
 }

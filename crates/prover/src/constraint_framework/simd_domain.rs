@@ -2,8 +2,7 @@ use std::ops::Mul;
 
 use num_traits::Zero;
 
-use super::logup::LogupAtRow;
-use super::{EvalAtRow, INTERACTION_TRACE_IDX};
+use super::EvalAtRow;
 use crate::core::backend::simd::column::VeryPackedBaseColumn;
 use crate::core::backend::simd::m31::LOG_N_LANES;
 use crate::core::backend::simd::very_packed_m31::{
@@ -14,7 +13,6 @@ use crate::core::backend::Column;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::SECURE_EXTENSION_DEGREE;
-use crate::core::lookups::utils::Fraction;
 use crate::core::pcs::TreeVec;
 use crate::core::poly::circle::CircleEvaluation;
 use crate::core::poly::BitReversedOrder;
@@ -32,7 +30,6 @@ pub struct SimdDomainEvaluator<'a> {
     pub constraint_index: usize,
     pub domain_log_size: u32,
     pub eval_domain_log_size: u32,
-    pub logup: LogupAtRow<Self>,
 }
 impl<'a> SimdDomainEvaluator<'a> {
     pub fn new(
@@ -41,8 +38,6 @@ impl<'a> SimdDomainEvaluator<'a> {
         random_coeff_powers: &'a [SecureField],
         domain_log_size: u32,
         eval_log_size: u32,
-        log_size: u32,
-        claimed_sum: SecureField,
     ) -> Self {
         Self {
             trace_eval,
@@ -53,11 +48,10 @@ impl<'a> SimdDomainEvaluator<'a> {
             constraint_index: 0,
             domain_log_size,
             eval_domain_log_size: eval_log_size,
-            logup: LogupAtRow::new(INTERACTION_TRACE_IDX, claimed_sum, log_size),
         }
     }
 }
-impl EvalAtRow for SimdDomainEvaluator<'_> {
+impl<'a> EvalAtRow for SimdDomainEvaluator<'a> {
     type F = VeryPackedBaseField;
     type EF = VeryPackedSecureField;
 
@@ -98,7 +92,7 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
     }
     fn add_constraint<G>(&mut self, constraint: G)
     where
-        Self::EF: Mul<G, Output = Self::EF> + From<G>,
+        Self::EF: Mul<G, Output = Self::EF>,
     {
         self.row_res +=
             VeryPackedSecureField::broadcast(self.random_coeff_powers[self.constraint_index])
@@ -109,6 +103,4 @@ impl EvalAtRow for SimdDomainEvaluator<'_> {
     fn combine_ef(values: [Self::F; SECURE_EXTENSION_DEGREE]) -> Self::EF {
         VeryPackedSecureField::from_very_packed_m31s(values)
     }
-
-    super::logup_proxy!();
 }

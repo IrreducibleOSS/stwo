@@ -63,14 +63,18 @@ impl<MC: MerkleChannel> CommitmentSchemeVerifier<MC> {
 
         let bounds = self
             .column_log_sizes()
-            .flatten()
+            .zip_cols(&sampled_points)
+            .map_cols(|(log_size, sampled_points)| {
+                vec![
+                    CirclePolyDegreeBound::new(log_size - self.config.fri_config.log_blowup_factor);
+                    sampled_points.len()
+                ]
+            })
+            .flatten_cols()
             .into_iter()
             .sorted()
             .rev()
             .dedup()
-            .map(|log_size| {
-                CirclePolyDegreeBound::new(log_size - self.config.fri_config.log_blowup_factor)
-            })
             .collect_vec();
 
         // FRI commitment phase on OODS quotients.
@@ -83,8 +87,8 @@ impl<MC: MerkleChannel> CommitmentSchemeVerifier<MC> {
             return Err(VerificationError::ProofOfWork);
         }
 
-        // Get FRI query positions.
-        let query_positions_per_log_size = fri_verifier.sample_query_positions(channel);
+        // Get FRI query domains.
+        let fri_query_domains = fri_verifier.column_query_positions(channel);
 
         // Verify merkle decommitments.
         self.trees
@@ -92,34 +96,35 @@ impl<MC: MerkleChannel> CommitmentSchemeVerifier<MC> {
             .zip_eq(proof.decommitments)
             .zip_eq(proof.queried_values.clone())
             .map(|((tree, decommitment), queried_values)| {
-                tree.verify(&query_positions_per_log_size, queried_values, decommitment)
+                let queries = fri_query_domains
+                    .iter()
+                    .map(|(&log_size, domain)| (log_size, domain.flatten()))
+                    .collect();
+                tree.verify(queries, queried_values, decommitment)
             })
             .0
             .into_iter()
             .collect::<Result<(), _>>()?;
 
         // Answer FRI queries.
-        let samples = sampled_points.zip_cols(proof.sampled_values).map_cols(
-            |(sampled_points, sampled_values)| {
+        let samples = sampled_points
+            .zip_cols(proof.sampled_values)
+            .map_cols(|(sampled_points, sampled_values)| {
                 zip(sampled_points, sampled_values)
                     .map(|(point, value)| PointSample { point, value })
                     .collect_vec()
-            },
-        );
-
-        let n_columns_per_log_size = self.trees.as_ref().map(|tree| &tree.n_columns_per_log_size);
+            })
+            .flatten();
 
         let fri_answers = fri_answers(
-            self.column_log_sizes(),
-            samples,
+            self.column_log_sizes().flatten().into_iter().collect(),
+            &samples,
             random_coeff,
-            &query_positions_per_log_size,
-            proof.queried_values,
-            n_columns_per_log_size,
+            fri_query_domains,
+            &proof.queried_values.flatten(),
         )?;
 
         fri_verifier.decommit(fri_answers)?;
-
         Ok(())
     }
 }

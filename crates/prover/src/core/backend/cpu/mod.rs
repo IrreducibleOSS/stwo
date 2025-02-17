@@ -1,4 +1,4 @@
-pub mod accumulation;
+mod accumulation;
 mod blake2s;
 pub mod circle;
 mod fri;
@@ -12,10 +12,11 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Backend, BackendForChannel, Column, ColumnOps};
+use super::{Backend, BackendForChannel, Column, ColumnOps, FieldOps};
+use crate::core::fields::Field;
 use crate::core::lookups::mle::Mle;
 use crate::core::poly::circle::{CircleEvaluation, CirclePoly};
-use crate::core::utils::bit_reverse_index;
+use crate::core::utils::bit_reverse;
 use crate::core::vcs::blake2_merkle::Blake2sMerkleChannel;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::core::vcs::poseidon252_merkle::Poseidon252MerkleChannel;
@@ -28,28 +29,19 @@ impl BackendForChannel<Blake2sMerkleChannel> for CpuBackend {}
 #[cfg(not(target_arch = "wasm32"))]
 impl BackendForChannel<Poseidon252MerkleChannel> for CpuBackend {}
 
-/// Performs a naive bit-reversal permutation inplace.
-///
-/// # Panics
-///
-/// Panics if the length of the slice is not a power of two.
-pub fn bit_reverse<T>(v: &mut [T]) {
-    let n = v.len();
-    assert!(n.is_power_of_two());
-    let log_n = n.ilog2();
-    for i in 0..n {
-        let j = bit_reverse_index(i, log_n);
-        if j > i {
-            v.swap(i, j);
-        }
-    }
-}
-
 impl<T: Debug + Clone + Default> ColumnOps<T> for CpuBackend {
     type Column = Vec<T>;
 
     fn bit_reverse_column(column: &mut Self::Column) {
         bit_reverse(column)
+    }
+}
+
+impl<F: Field> FieldOps<F> for CpuBackend {
+    /// Batch inversion using the Montgomery's trick.
+    // TODO(Ohad): Benchmark this function.
+    fn batch_inverse(column: &Self::Column, dst: &mut Self::Column) {
+        F::batch_inverse(column, &mut dst[..]);
     }
 }
 
@@ -85,36 +77,19 @@ pub type CpuMle<F> = Mle<CpuBackend, F>;
 mod tests {
     use itertools::Itertools;
     use rand::prelude::*;
-    use rand::rngs::SmallRng;
 
-    use crate::core::backend::cpu::bit_reverse;
-    use crate::core::backend::Column;
+    use crate::core::backend::{Column, CpuBackend, FieldOps};
     use crate::core::fields::qm31::QM31;
-    use crate::core::fields::{batch_inverse_in_place, FieldExpOps};
+    use crate::core::fields::FieldExpOps;
 
     #[test]
-    fn bit_reverse_works() {
-        let mut data = [0, 1, 2, 3, 4, 5, 6, 7];
-        bit_reverse(&mut data);
-        assert_eq!(data, [0, 4, 2, 6, 1, 5, 3, 7]);
-    }
-
-    #[test]
-    #[should_panic]
-    fn bit_reverse_non_power_of_two_size_fails() {
-        let mut data = [0, 1, 2, 3, 4, 5];
-        bit_reverse(&mut data);
-    }
-
-    // TODO(Ohad): remove.
-    #[test]
-    fn batch_inverse_in_place_test() {
+    fn batch_inverse_test() {
         let mut rng = SmallRng::seed_from_u64(0);
         let column = rng.gen::<[QM31; 16]>().to_vec();
         let expected = column.iter().map(|e| e.inverse()).collect_vec();
-        let mut dst = Vec::zeros(column.len());
+        let mut dst = Column::zeros(column.len());
 
-        batch_inverse_in_place(&column, &mut dst);
+        CpuBackend::batch_inverse(&column, &mut dst);
 
         assert_eq!(expected, dst);
     }

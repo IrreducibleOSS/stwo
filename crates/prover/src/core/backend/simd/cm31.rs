@@ -5,9 +5,9 @@ use bytemuck::{Pod, Zeroable};
 use num_traits::{One, Zero};
 
 use super::m31::{PackedM31, N_LANES};
-use super::PACKED_CM31_BATCH_INVERSE_CHUNK_SIZE;
 use crate::core::fields::cm31::CM31;
-use crate::core::fields::{batch_inverse_chunked, FieldExpOps};
+use crate::core::fields::FieldExpOps;
+use crate::core::tracing::trace_multiplication;
 
 /// SIMD implementation of [`CM31`].
 #[derive(Copy, Clone, Debug)]
@@ -20,12 +20,12 @@ impl PackedCM31 {
     }
 
     /// Returns all `a` values such that each vector element is represented as `a + bi`.
-    pub const fn a(&self) -> PackedM31 {
+    pub fn a(&self) -> PackedM31 {
         self.0[0]
     }
 
     /// Returns all `b` values such that each vector element is represented as `a + bi`.
-    pub const fn b(&self) -> PackedM31 {
+    pub fn b(&self) -> PackedM31 {
         self.0[1]
     }
 
@@ -87,6 +87,7 @@ impl Mul for PackedCM31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        trace_multiplication!(PackedCM31);
         // Compute using Karatsuba.
         let ac = self.a() * rhs.a();
         let bd = self.b() * rhs.b();
@@ -133,10 +134,6 @@ impl FieldExpOps for PackedCM31 {
         // 1 / (a + bi) = (a - bi) / (a^2 + b^2).
         Self([self.a(), -self.b()]) * (self.a().square() + self.b().square()).inverse()
     }
-
-    fn batch_inverse(column: &[Self]) -> Vec<Self> {
-        batch_inverse_chunked(column, PACKED_CM31_BATCH_INVERSE_CHUNK_SIZE)
-    }
 }
 
 impl Add<PackedM31> for PackedCM31 {
@@ -160,6 +157,7 @@ impl Mul<PackedM31> for PackedCM31 {
     type Output = Self;
 
     fn mul(self, rhs: PackedM31) -> Self::Output {
+        trace_multiplication!(PackedCM31, PackedM31);
         let Self([a, b]) = self;
         Self([a * rhs, b * rhs])
     }

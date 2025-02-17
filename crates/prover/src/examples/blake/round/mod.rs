@@ -5,20 +5,22 @@ pub use gen::{generate_interaction_trace, generate_trace, BlakeRoundInput};
 use num_traits::Zero;
 
 use super::{BlakeXorElements, N_ROUND_INPUT_FELTS};
-use crate::constraint_framework::{
-    relation, EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator,
-};
+use crate::constraint_framework::logup::{LogupAtRow, LookupElements};
+use crate::constraint_framework::preprocessed_columns::PreprocessedColumn;
+use crate::constraint_framework::{EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator};
 use crate::core::fields::qm31::SecureField;
 
 pub type BlakeRoundComponent = FrameworkComponent<BlakeRoundEval>;
 
-relation!(RoundElements, N_ROUND_INPUT_FELTS);
+pub type RoundElements = LookupElements<N_ROUND_INPUT_FELTS>;
+
+use crate::constraint_framework::INTERACTION_TRACE_IDX;
 
 pub struct BlakeRoundEval {
     pub log_size: u32,
     pub xor_lookup_elements: BlakeXorElements,
     pub round_lookup_elements: RoundElements,
-    pub claimed_sum: SecureField,
+    pub total_sum: SecureField,
 }
 
 impl FrameworkEval for BlakeRoundEval {
@@ -28,13 +30,13 @@ impl FrameworkEval for BlakeRoundEval {
     fn max_constraint_log_degree_bound(&self) -> u32 {
         self.log_size + 1
     }
-    fn evaluate<E: EvalAtRow>(&self, eval: E) -> E {
+    fn evaluate<E: EvalAtRow>(&self, mut eval: E) -> E {
+        let is_first = eval.get_preprocessed_column(PreprocessedColumn::IsFirst(self.log_size()));
         let blake_eval = constraints::BlakeRoundEval {
             eval,
             xor_lookup_elements: &self.xor_lookup_elements,
             round_lookup_elements: &self.round_lookup_elements,
-            _claimed_sum: self.claimed_sum,
-            _log_size: self.log_size,
+            logup: LogupAtRow::new(INTERACTION_TRACE_IDX, self.total_sum, None, is_first),
         };
         blake_eval.eval()
     }
@@ -45,9 +47,9 @@ pub fn blake_round_info() -> InfoEvaluator {
         log_size: 1,
         xor_lookup_elements: BlakeXorElements::dummy(),
         round_lookup_elements: RoundElements::dummy(),
-        claimed_sum: SecureField::zero(),
+        total_sum: SecureField::zero(),
     };
-    component.evaluate(InfoEvaluator::empty())
+    component.evaluate(InfoEvaluator::default())
 }
 
 #[cfg(test)]
@@ -56,7 +58,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::constraint_framework::preprocessed_columns::IsFirst;
+    use crate::constraint_framework::preprocessed_columns::gen_is_first;
     use crate::constraint_framework::FrameworkEval;
     use crate::core::poly::circle::CanonicCoset;
     use crate::examples::blake::round::r#gen::{
@@ -85,25 +87,21 @@ mod tests {
 
         let xor_lookup_elements = BlakeXorElements::dummy();
         let round_lookup_elements = RoundElements::dummy();
-        let (interaction_trace, claimed_sum) = generate_interaction_trace(
+        let (interaction_trace, total_sum) = generate_interaction_trace(
             LOG_SIZE,
             lookup_data,
             &xor_lookup_elements,
             &round_lookup_elements,
         );
 
-        let trace = TreeVec::new(vec![
-            vec![IsFirst::new(LOG_SIZE).gen_column_simd()],
-            trace,
-            interaction_trace,
-        ]);
+        let trace = TreeVec::new(vec![trace, interaction_trace, vec![gen_is_first(LOG_SIZE)]]);
         let trace_polys = trace.map_cols(|c| c.interpolate());
 
         let component = BlakeRoundEval {
             log_size: LOG_SIZE,
             xor_lookup_elements,
             round_lookup_elements,
-            claimed_sum,
+            total_sum,
         };
         crate::constraint_framework::assert_constraints(
             &trace_polys,
@@ -111,7 +109,6 @@ mod tests {
             |eval| {
                 component.evaluate(eval);
             },
-            claimed_sum,
         )
     }
 }

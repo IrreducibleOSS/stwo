@@ -8,10 +8,9 @@ use rand::distributions::{Distribution, Standard};
 
 use super::cm31::PackedCM31;
 use super::m31::{PackedM31, N_LANES};
-use super::PACKED_QM31_BATCH_INVERSE_CHUNK_SIZE;
-use crate::core::fields::m31::M31;
 use crate::core::fields::qm31::QM31;
-use crate::core::fields::{batch_inverse_chunked, FieldExpOps};
+use crate::core::fields::FieldExpOps;
+use crate::core::tracing::trace_multiplication;
 
 pub type PackedSecureField = PackedQM31;
 
@@ -29,12 +28,12 @@ impl PackedQM31 {
     }
 
     /// Returns all `a` values such that each vector element is represented as `a + bu`.
-    pub const fn a(&self) -> PackedCM31 {
+    pub fn a(&self) -> PackedCM31 {
         self.0[0]
     }
 
     /// Returns all `b` values such that each vector element is represented as `a + bu`.
-    pub const fn b(&self) -> PackedCM31 {
+    pub fn b(&self) -> PackedCM31 {
         self.0[1]
     }
 
@@ -81,14 +80,14 @@ impl PackedQM31 {
 
     /// Returns vectors `a, b, c, d` such that element `i` is represented as
     /// `QM31(a_i, b_i, c_i, d_i)`.
-    pub const fn into_packed_m31s(self) -> [PackedM31; 4] {
+    pub fn into_packed_m31s(self) -> [PackedM31; 4] {
         let Self([PackedCM31([a, b]), PackedCM31([c, d])]) = self;
         [a, b, c, d]
     }
 
     /// Creates an instance from vectors `a, b, c, d` such that element `i`
     /// is represented as `QM31(a_i, b_i, c_i, d_i)`.
-    pub const fn from_packed_m31s([a, b, c, d]: [PackedM31; 4]) -> Self {
+    pub fn from_packed_m31s([a, b, c, d]: [PackedM31; 4]) -> Self {
         Self([PackedCM31([a, b]), PackedCM31([c, d])])
     }
 }
@@ -113,6 +112,7 @@ impl Mul for PackedQM31 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
+        trace_multiplication!(PackedQM31);
         // Compute using Karatsuba.
         //   (a + ub) * (c + ud) =
         //   (ac + (2+i)bd) + (ad + bc)u =
@@ -172,10 +172,6 @@ impl FieldExpOps for PackedQM31 {
         let denom_inverse = denom.inverse();
         Self([self.a() * denom_inverse, -self.b() * denom_inverse])
     }
-
-    fn batch_inverse(column: &[Self]) -> Vec<Self> {
-        batch_inverse_chunked(column, PACKED_QM31_BATCH_INVERSE_CHUNK_SIZE)
-    }
 }
 
 impl Add<PackedM31> for PackedQM31 {
@@ -190,6 +186,7 @@ impl Mul<PackedM31> for PackedQM31 {
     type Output = Self;
 
     fn mul(self, rhs: PackedM31) -> Self::Output {
+        trace_multiplication!(PackedQM31, PackedM31);
         let Self([a, b]) = self;
         Self([a * rhs, b * rhs])
     }
@@ -199,6 +196,7 @@ impl Mul<PackedCM31> for PackedQM31 {
     type Output = Self;
 
     fn mul(self, rhs: PackedCM31) -> Self::Output {
+        trace_multiplication!(PackedQM31, PackedCM31);
         let Self([a, b]) = self;
         Self([a * rhs, b * rhs])
     }
@@ -233,25 +231,8 @@ impl Mul<QM31> for PackedQM31 {
     type Output = Self;
 
     fn mul(self, rhs: QM31) -> Self::Output {
+        trace_multiplication!(PackedQM31, QM31);
         self * PackedQM31::broadcast(rhs)
-    }
-}
-
-impl Mul<M31> for PackedQM31 {
-    type Output = Self;
-
-    #[inline(always)]
-    fn mul(self, rhs: M31) -> Self::Output {
-        self * PackedM31::broadcast(rhs)
-    }
-}
-
-impl Add<M31> for PackedQM31 {
-    type Output = Self;
-
-    #[inline(always)]
-    fn add(self, rhs: M31) -> Self::Output {
-        self + PackedM31::broadcast(rhs)
     }
 }
 

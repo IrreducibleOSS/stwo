@@ -1,28 +1,24 @@
 use num_traits::{One, Zero};
 
-use crate::constraint_framework::relation_tracker::{
-    RelationTrackerComponent, RelationTrackerEntry,
-};
+use crate::constraint_framework::logup::{ClaimedPrefixSum, LogupAtRow, LookupElements};
+use crate::constraint_framework::preprocessed_columns::PreprocessedColumn;
 use crate::constraint_framework::{
-    relation, EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator, RelationEntry,
-    TraceLocationAllocator, PREPROCESSED_TRACE_IDX,
+    EvalAtRow, FrameworkComponent, FrameworkEval, InfoEvaluator, INTERACTION_TRACE_IDX,
 };
 use crate::core::air::{Component, ComponentProver};
 use crate::core::backend::simd::SimdBackend;
 use crate::core::channel::Channel;
-use crate::core::fields::m31::{BaseField, M31};
+use crate::core::fields::m31::M31;
 use crate::core::fields::qm31::{SecureField, QM31};
+use crate::core::lookups::utils::Fraction;
 use crate::core::pcs::TreeVec;
-use crate::core::poly::circle::CircleEvaluation;
-use crate::core::poly::BitReversedOrder;
 use crate::core::prover::StarkProof;
 use crate::core::vcs::ops::MerkleHasher;
 
 const LOG_CONSTRAINT_DEGREE: u32 = 1;
 pub const STATE_SIZE: usize = 2;
-// Random elements to combine the StateMachine state.
-relation!(StateMachineElements, STATE_SIZE);
-
+/// Random elements to combine the StateMachine state.
+pub type StateMachineElements = LookupElements<STATE_SIZE>;
 pub type State = [M31; STATE_SIZE];
 
 pub type StateMachineOp0Component = FrameworkComponent<StateTransitionEval<0>>;
@@ -34,7 +30,8 @@ pub type StateMachineOp1Component = FrameworkComponent<StateTransitionEval<1>>;
 pub struct StateTransitionEval<const COORDINATE: usize> {
     pub log_n_rows: u32,
     pub lookup_elements: StateMachineElements,
-    pub claimed_sum: QM31,
+    pub total_sum: QM31,
+    pub claimed_sum: ClaimedPrefixSum,
 }
 
 impl<const COORDINATE: usize> FrameworkEval for StateTransitionEval<COORDINATE> {
@@ -45,23 +42,28 @@ impl<const COORDINATE: usize> FrameworkEval for StateTransitionEval<COORDINATE> 
         self.log_n_rows + LOG_CONSTRAINT_DEGREE
     }
     fn evaluate<E: EvalAtRow>(&self, mut eval: E) -> E {
+        let is_first = eval.get_preprocessed_column(PreprocessedColumn::IsFirst(self.log_size()));
+        let mut logup: LogupAtRow<E> = LogupAtRow::new(
+            INTERACTION_TRACE_IDX,
+            self.total_sum,
+            Some(self.claimed_sum),
+            is_first,
+        );
+
         let input_state: [_; STATE_SIZE] = std::array::from_fn(|_| eval.next_trace_mask());
+        let input_denom: E::EF = self.lookup_elements.combine(&input_state);
 
-        let mut output_state = input_state.clone();
+        let mut output_state = input_state;
         output_state[COORDINATE] += E::F::one();
+        let output_denom: E::EF = self.lookup_elements.combine(&output_state);
 
-        eval.add_to_relation(RelationEntry::new(
-            &self.lookup_elements,
-            E::EF::one(),
-            &input_state,
-        ));
-        eval.add_to_relation(RelationEntry::new(
-            &self.lookup_elements,
-            -E::EF::one(),
-            &output_state,
-        ));
+        logup.write_frac(
+            &mut eval,
+            Fraction::new(E::EF::one(), input_denom)
+                + Fraction::new(-E::EF::one(), output_denom.clone()),
+        );
 
-        eval.finalize_logup_in_pairs();
+        logup.finalize(&mut eval);
         eval
     }
 }
@@ -82,9 +84,7 @@ impl StateMachineStatement0 {
                 .as_cols_ref()
                 .map_cols(|_| self.m),
         ];
-        let mut log_sizes = TreeVec::concat_cols(sizes.into_iter());
-        log_sizes[PREPROCESSED_TRACE_IDX] = vec![];
-        log_sizes
+        TreeVec::concat_cols(sizes.into_iter())
     }
     pub fn mix_into(&self, channel: &mut impl Channel) {
         channel.mix_u64(self.n as u64);
@@ -106,9 +106,10 @@ fn state_transition_info<const INDEX: usize>() -> InfoEvaluator {
     let component = StateTransitionEval::<INDEX> {
         log_n_rows: 1,
         lookup_elements: StateMachineElements::dummy(),
-        claimed_sum: QM31::zero(),
+        total_sum: QM31::zero(),
+        claimed_sum: (QM31::zero(), 0),
     };
-    component.evaluate(InfoEvaluator::empty())
+    component.evaluate(InfoEvaluator::default())
 }
 
 pub struct StateMachineComponents {
@@ -130,41 +131,6 @@ impl StateMachineComponents {
             &self.component1 as &dyn ComponentProver<SimdBackend>,
         ]
     }
-}
-
-pub fn track_state_machine_relations(
-    trace: &TreeVec<&Vec<CircleEvaluation<SimdBackend, BaseField, BitReversedOrder>>>,
-    x_axis_log_n_rows: u32,
-    y_axis_log_n_rows: u32,
-) -> Vec<RelationTrackerEntry> {
-    let tree_span_provider = &mut TraceLocationAllocator::default();
-    let mut entries = vec![];
-    entries.extend(
-        RelationTrackerComponent::new(
-            tree_span_provider,
-            StateTransitionEval::<0> {
-                log_n_rows: x_axis_log_n_rows,
-                lookup_elements: StateMachineElements::dummy(),
-                claimed_sum: QM31::zero(),
-            },
-            1 << x_axis_log_n_rows,
-        )
-        .entries(&trace.into()),
-    );
-    entries.extend(
-        RelationTrackerComponent::new(
-            tree_span_provider,
-            StateTransitionEval::<1> {
-                log_n_rows: y_axis_log_n_rows,
-                lookup_elements: StateMachineElements::dummy(),
-                claimed_sum: QM31::zero(),
-            },
-            1 << y_axis_log_n_rows,
-        )
-        .entries(&trace.into()),
-    );
-
-    entries
 }
 
 pub struct StateMachineProof<H: MerkleHasher> {

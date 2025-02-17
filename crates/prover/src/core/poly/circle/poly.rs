@@ -1,14 +1,15 @@
 use super::{CircleDomain, CircleEvaluation, PolyOps};
-use crate::core::backend::{Col, Column, ColumnOps};
+use crate::core::backend::{Col, Column};
 use crate::core::circle::CirclePoint;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
+use crate::core::fields::FieldOps;
 use crate::core::poly::twiddles::TwiddleTree;
 use crate::core::poly::BitReversedOrder;
 
 /// A polynomial defined on a [CircleDomain].
 #[derive(Clone, Debug)]
-pub struct CirclePoly<B: ColumnOps<BaseField>> {
+pub struct CirclePoly<B: FieldOps<BaseField>> {
     /// Coefficients of the polynomial in the FFT basis.
     /// Note: These are not the coefficients of the polynomial in the standard
     /// monomial basis. The FFT basis is a tensor product of the twiddles:
@@ -33,7 +34,7 @@ impl<B: PolyOps> CirclePoly<B> {
         Self { log_size, coeffs }
     }
 
-    pub const fn log_size(&self) -> u32 {
+    pub fn log_size(&self) -> u32 {
         self.log_size
     }
 

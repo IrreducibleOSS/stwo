@@ -84,7 +84,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use crate::core::channel::Poseidon252Channel;
     use crate::core::fields::m31::BaseField;
-    use crate::core::fields::qm31::SecureField;
     use crate::core::pcs::{CommitmentSchemeProver, CommitmentSchemeVerifier, PcsConfig, TreeVec};
     use crate::core::poly::circle::{CanonicCoset, CircleEvaluation, PolyOps};
     use crate::core::poly::BitReversedOrder;
@@ -138,7 +137,7 @@ mod tests {
     #[test]
     fn test_wide_fibonacci_constraints() {
         const LOG_N_INSTANCES: u32 = 6;
-        let traces = TreeVec::new(vec![vec![], generate_test_trace(LOG_N_INSTANCES)]);
+        let traces = TreeVec::new(vec![generate_test_trace(LOG_N_INSTANCES)]);
         let trace_polys =
             traces.map(|trace| trace.into_iter().map(|c| c.interpolate()).collect_vec());
 
@@ -146,7 +145,6 @@ mod tests {
             &trace_polys,
             CanonicCoset::new(LOG_N_INSTANCES),
             fibonacci_constraint_evaluator::<LOG_N_INSTANCES>,
-            SecureField::zero(),
         );
     }
 
@@ -158,7 +156,7 @@ mod tests {
         let mut trace = generate_test_trace(LOG_N_INSTANCES);
         // Modify the trace such that a constraint fail.
         trace[17].values.set(2, BaseField::one());
-        let traces = TreeVec::new(vec![vec![], trace]);
+        let traces = TreeVec::new(vec![trace]);
         let trace_polys =
             traces.map(|trace| trace.into_iter().map(|c| c.interpolate()).collect_vec());
 
@@ -166,7 +164,6 @@ mod tests {
             &trace_polys,
             CanonicCoset::new(LOG_N_INSTANCES),
             fibonacci_constraint_evaluator::<LOG_N_INSTANCES>,
-            SecureField::zero(),
         );
     }
 
@@ -183,13 +180,10 @@ mod tests {
 
             // Setup protocol.
             let prover_channel = &mut Blake2sChannel::default();
-            let mut commitment_scheme =
-                CommitmentSchemeProver::<SimdBackend, Blake2sMerkleChannel>::new(config, &twiddles);
-
-            // Preprocessed trace
-            let mut tree_builder = commitment_scheme.tree_builder();
-            tree_builder.extend_evals([]);
-            tree_builder.commit(prover_channel);
+            let commitment_scheme =
+                &mut CommitmentSchemeProver::<SimdBackend, Blake2sMerkleChannel>::new(
+                    config, &twiddles,
+                );
 
             // Trace.
             let trace = generate_test_trace(log_n_instances);
@@ -203,7 +197,6 @@ mod tests {
                 WideFibonacciEval::<FIB_SEQUENCE_LENGTH> {
                     log_n_rows: log_n_instances,
                 },
-                SecureField::zero(),
             );
 
             let proof = prove::<SimdBackend, Blake2sMerkleChannel>(
@@ -221,7 +214,6 @@ mod tests {
             // Retrieve the expected column sizes in each commitment interaction, from the AIR.
             let sizes = component.trace_log_degree_bounds();
             commitment_scheme.commit(proof.commitments[0], &sizes[0], verifier_channel);
-            commitment_scheme.commit(proof.commitments[1], &sizes[1], verifier_channel);
             verify(&[&component], verifier_channel, commitment_scheme, proof).unwrap();
         }
     }
@@ -240,14 +232,10 @@ mod tests {
 
         // Setup protocol.
         let prover_channel = &mut Poseidon252Channel::default();
-        let mut commitment_scheme =
-            CommitmentSchemeProver::<SimdBackend, Poseidon252MerkleChannel>::new(config, &twiddles);
-
-        // TODO(ilya): remove the following once preproccessed columns are not mandatory.
-        // Preprocessed trace
-        let mut tree_builder = commitment_scheme.tree_builder();
-        tree_builder.extend_evals([]);
-        tree_builder.commit(prover_channel);
+        let commitment_scheme =
+            &mut CommitmentSchemeProver::<SimdBackend, Poseidon252MerkleChannel>::new(
+                config, &twiddles,
+            );
 
         // Trace.
         let trace = generate_test_trace(LOG_N_INSTANCES);
@@ -261,7 +249,6 @@ mod tests {
             WideFibonacciEval::<FIB_SEQUENCE_LENGTH> {
                 log_n_rows: LOG_N_INSTANCES,
             },
-            SecureField::zero(),
         );
         let proof = prove::<SimdBackend, Poseidon252MerkleChannel>(
             &[&component],
@@ -273,12 +260,11 @@ mod tests {
         // Verify.
         let verifier_channel = &mut Poseidon252Channel::default();
         let commitment_scheme =
-            &mut CommitmentSchemeVerifier::<Poseidon252MerkleChannel>::new(proof.config);
+            &mut CommitmentSchemeVerifier::<Poseidon252MerkleChannel>::new(config);
 
         // Retrieve the expected column sizes in each commitment interaction, from the AIR.
         let sizes = component.trace_log_degree_bounds();
         commitment_scheme.commit(proof.commitments[0], &sizes[0], verifier_channel);
-        commitment_scheme.commit(proof.commitments[1], &sizes[1], verifier_channel);
         verify(&[&component], verifier_channel, commitment_scheme, proof).unwrap();
     }
 }

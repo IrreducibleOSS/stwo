@@ -9,14 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use super::circle::CircleDomain;
 use super::utils::fold;
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::{ColumnOps, CpuBackend};
 use crate::core::circle::{CirclePoint, Coset, CosetIterator};
 use crate::core::fft::ibutterfly;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::SecureColumnByCoords;
-use crate::core::fields::ExtensionOf;
+use crate::core::fields::{ExtensionOf, FieldExpOps, FieldOps};
+use crate::core::utils::bit_reverse;
 
 /// Domain comprising of the x-coordinates of points in a [Coset].
 ///
@@ -58,12 +58,12 @@ impl LineDomain {
     }
 
     /// Returns the size of the domain.
-    pub const fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.coset.size()
     }
 
     /// Returns the log size of the domain.
-    pub const fn log_size(&self) -> u32 {
+    pub fn log_size(&self) -> u32 {
         self.coset.log_size()
     }
 
@@ -80,7 +80,7 @@ impl LineDomain {
     }
 
     /// Returns the domain's underlying coset.
-    pub const fn coset(&self) -> Coset {
+    pub fn coset(&self) -> Coset {
         self.coset
     }
 }
@@ -110,10 +110,9 @@ type LineDomainIterator =
 /// A univariate polynomial defined on a [LineDomain].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct LinePoly {
-    /// Coefficients of the polynomial in [`line_ifft`] algorithm's basis.
+    /// Coefficients of the polynomial in [line_ifft] algorithm's basis.
     ///
     /// The coefficients are stored in bit-reversed order.
-    #[allow(rustdoc::private_intra_doc_links)]
     coeffs: Vec<SecureField>,
     /// The number of coefficients stored as `log2(len(coeffs))`.
     log_size: u32,
@@ -186,13 +185,13 @@ impl DerefMut for LinePoly {
 // only used by FRI where evaluations are in bit-reversed order.
 // TODO(andrew): Remove pub.
 #[derive(Clone, Debug)]
-pub struct LineEvaluation<B: ColumnOps<BaseField>> {
+pub struct LineEvaluation<B: FieldOps<BaseField>> {
     /// Evaluations of a univariate polynomial on `domain`.
     pub values: SecureColumnByCoords<B>,
     domain: LineDomain,
 }
 
-impl<B: ColumnOps<BaseField>> LineEvaluation<B> {
+impl<B: FieldOps<BaseField>> LineEvaluation<B> {
     /// Creates new [LineEvaluation] from a set of polynomial evaluations over a [LineDomain].
     ///
     /// # Panics
@@ -209,11 +208,11 @@ impl<B: ColumnOps<BaseField>> LineEvaluation<B> {
 
     /// Returns the number of evaluations.
     #[allow(clippy::len_without_is_empty)]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         1 << self.domain.log_size()
     }
 
-    pub const fn domain(&self) -> LineDomain {
+    pub fn domain(&self) -> LineDomain {
         self.domain
     }
 

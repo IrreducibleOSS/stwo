@@ -3,13 +3,18 @@ use std::iter::{Product, Sum};
 use std::ops::{Mul, MulAssign, Neg};
 
 use num_traits::{NumAssign, NumAssignOps, NumOps, One};
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
+
+use super::backend::ColumnOps;
 
 pub mod cm31;
 pub mod m31;
 pub mod qm31;
 pub mod secure_column;
+
+pub trait FieldOps<F: Field>: ColumnOps<F> {
+    // TODO(Ohad): change to use a mutable slice.
+    fn batch_inverse(column: &Self::Column, dst: &mut Self::Column);
+}
 
 pub trait FieldExpOps: Mul<Output = Self> + MulAssign + Sized + One + Clone {
     fn square(&self) -> Self {
@@ -32,8 +37,37 @@ pub trait FieldExpOps: Mul<Output = Self> + MulAssign + Sized + One + Clone {
 
     fn inverse(&self) -> Self;
 
-    fn batch_inverse(column: &[Self]) -> Vec<Self> {
-        batch_inverse(column)
+    /// Inverts a batch of elements using Montgomery's trick.
+    fn batch_inverse(column: &[Self], dst: &mut [Self]) {
+        const WIDTH: usize = 4;
+        let n = column.len();
+        debug_assert!(dst.len() >= n);
+
+        if n <= WIDTH || n % WIDTH != 0 {
+            batch_inverse_classic(column, dst);
+            return;
+        }
+
+        // First pass. Compute 'WIDTH' cumulative products in an interleaving fashion, reducing
+        // instruction dependency and allowing better pipelining.
+        let mut cum_prod: [Self; WIDTH] = std::array::from_fn(|_| Self::one());
+        dst[..WIDTH].clone_from_slice(&cum_prod);
+        for i in 0..n {
+            cum_prod[i % WIDTH] *= column[i].clone();
+            dst[i] = cum_prod[i % WIDTH].clone();
+        }
+
+        // Inverse cumulative products.
+        // Use classic batch inversion.
+        let mut tail_inverses: [Self; WIDTH] = std::array::from_fn(|_| Self::one());
+        batch_inverse_classic(&dst[n - WIDTH..], &mut tail_inverses);
+
+        // Second pass.
+        for i in (WIDTH..n).rev() {
+            dst[i] = dst[i - WIDTH].clone() * tail_inverses[i % WIDTH].clone();
+            tail_inverses[i % WIDTH] *= column[i].clone();
+        }
+        dst[0..WIDTH].clone_from_slice(&tail_inverses);
     }
 }
 
@@ -42,12 +76,7 @@ fn batch_inverse_classic<T: FieldExpOps>(column: &[T], dst: &mut [T]) {
     let n = column.len();
     debug_assert!(dst.len() >= n);
 
-    if let Some(first) = column.first() {
-        dst[0] = first.clone();
-    } else {
-        return;
-    }
-
+    dst[0] = column[0].clone();
     // First pass.
     for i in 1..n {
         dst[i] = dst[i - 1].clone() * column[i].clone();
@@ -62,65 +91,6 @@ fn batch_inverse_classic<T: FieldExpOps>(column: &[T], dst: &mut [T]) {
         curr_inverse *= column[i].clone();
     }
     dst[0] = curr_inverse;
-}
-
-/// Inverts a batch of elements using Montgomery's trick.
-pub fn batch_inverse_in_place<F: FieldExpOps>(column: &[F], dst: &mut [F]) {
-    const WIDTH: usize = 4;
-    let n = column.len();
-    debug_assert!(dst.len() >= n);
-
-    if n <= WIDTH || n % WIDTH != 0 {
-        batch_inverse_classic(column, dst);
-        return;
-    }
-
-    // First pass. Compute 'WIDTH' cumulative products in an interleaving fashion, reducing
-    // instruction dependency and allowing better pipelining.
-    let mut cum_prod: [F; WIDTH] = std::array::from_fn(|_| F::one());
-    dst[..WIDTH].clone_from_slice(&cum_prod);
-    for i in 0..n {
-        cum_prod[i % WIDTH] *= column[i].clone();
-        dst[i] = cum_prod[i % WIDTH].clone();
-    }
-
-    // Inverse cumulative products.
-    // Use classic batch inversion.
-    let mut tail_inverses: [F; WIDTH] = std::array::from_fn(|_| F::one());
-    batch_inverse_classic(&dst[n - WIDTH..], &mut tail_inverses);
-
-    // Second pass.
-    for i in (WIDTH..n).rev() {
-        dst[i] = dst[i - WIDTH].clone() * tail_inverses[i % WIDTH].clone();
-        tail_inverses[i % WIDTH] *= column[i].clone();
-    }
-    dst[0..WIDTH].clone_from_slice(&tail_inverses);
-}
-
-pub fn batch_inverse<F: FieldExpOps>(column: &[F]) -> Vec<F> {
-    let mut dst = vec![unsafe { std::mem::zeroed() }; column.len()];
-    batch_inverse_in_place(column, &mut dst);
-    dst
-}
-
-pub fn batch_inverse_chunked<T: FieldExpOps + Send + Sync>(
-    column: &[T],
-    chunk_size: usize,
-) -> Vec<T> {
-    let mut dst = vec![unsafe { std::mem::zeroed() }; column.len()];
-
-    #[cfg(not(feature = "parallel"))]
-    let iter = dst.chunks_mut(chunk_size).zip(column.chunks(chunk_size));
-
-    #[cfg(feature = "parallel")]
-    let iter = dst
-        .par_chunks_mut(chunk_size)
-        .zip(column.par_chunks(chunk_size));
-
-    iter.for_each(|(dst, column)| {
-        batch_inverse_in_place(column, dst);
-    });
-    dst
 }
 
 pub trait Field:
@@ -492,19 +462,19 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
 
-    use super::batch_inverse_in_place;
     use crate::core::fields::m31::M31;
-    use crate::core::fields::{batch_inverse, batch_inverse_chunked};
+    use crate::core::fields::FieldExpOps;
 
     #[test]
-    fn test_batch_inverse() {
+    fn test_slice_batch_inverse() {
         let mut rng = SmallRng::seed_from_u64(0);
         let elements: [M31; 16] = rng.gen();
         let expected = elements.iter().map(|e| e.inverse()).collect::<Vec<_>>();
+        let mut dst = [M31::zero(); 16];
 
-        let actual = batch_inverse(&elements);
+        M31::batch_inverse(&elements, &mut dst);
 
-        assert_eq!(expected, actual);
+        assert_eq!(expected, dst);
     }
 
     #[test]
@@ -514,18 +484,6 @@ mod tests {
         let elements: [M31; 16] = rng.gen();
         let mut dst = [M31::zero(); 15];
 
-        batch_inverse_in_place(&elements, &mut dst);
-    }
-
-    #[test]
-    fn test_batch_inverse_chunked() {
-        let mut rng = SmallRng::seed_from_u64(0);
-        let elements: [M31; 16] = rng.gen();
-        let chunk_size = 4;
-        let expected = batch_inverse(&elements);
-
-        let result = batch_inverse_chunked(&elements, chunk_size);
-
-        assert_eq!(expected, result);
+        M31::batch_inverse(&elements, &mut dst);
     }
 }

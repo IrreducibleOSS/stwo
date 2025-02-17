@@ -5,18 +5,18 @@ use std::iter::zip;
 use itertools::{izip, multiunzip, Itertools};
 use tracing::{span, Level};
 
-use super::TreeVec;
 use crate::core::backend::cpu::quotients::{accumulate_row_quotients, quotient_constants};
 use crate::core::circle::CirclePoint;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
+use crate::core::fri::SparseCircleEvaluation;
 use crate::core::poly::circle::{
     CanonicCoset, CircleDomain, CircleEvaluation, PolyOps, SecureEvaluation,
 };
 use crate::core::poly::BitReversedOrder;
 use crate::core::prover::VerificationError;
+use crate::core::queries::SparseSubCircleDomain;
 use crate::core::utils::bit_reverse_index;
-use crate::core::ColumnVec;
 
 pub trait QuotientOps: PolyOps {
     /// Accumulates the quotients of the columns at the given domain.
@@ -101,30 +101,25 @@ pub fn compute_fri_quotients<B: QuotientOps>(
 }
 
 pub fn fri_answers(
-    column_log_sizes: TreeVec<Vec<u32>>,
-    samples: TreeVec<Vec<Vec<PointSample>>>,
+    column_log_sizes: Vec<u32>,
+    samples: &[Vec<PointSample>],
     random_coeff: SecureField,
-    query_positions_per_log_size: &BTreeMap<u32, Vec<usize>>,
-    queried_values: TreeVec<Vec<BaseField>>,
-    n_columns_per_log_size: TreeVec<&BTreeMap<u32, usize>>,
-) -> Result<ColumnVec<Vec<SecureField>>, VerificationError> {
-    let mut queried_values = queried_values.map(|values| values.into_iter());
-
-    izip!(column_log_sizes.flatten(), samples.flatten().iter())
+    query_domain_per_log_size: BTreeMap<u32, SparseSubCircleDomain>,
+    queried_values_per_column: &[Vec<BaseField>],
+) -> Result<Vec<SparseCircleEvaluation>, VerificationError> {
+    izip!(column_log_sizes, samples, queried_values_per_column)
         .sorted_by_key(|(log_size, ..)| Reverse(*log_size))
         .group_by(|(log_size, ..)| *log_size)
         .into_iter()
         .map(|(log_size, tuples)| {
-            let (_, samples): (Vec<_>, Vec<_>) = multiunzip(tuples);
+            let (_, samples, queried_valued_per_column): (Vec<_>, Vec<_>, Vec<_>) =
+                multiunzip(tuples);
             fri_answers_for_log_size(
                 log_size,
                 &samples,
                 random_coeff,
-                &query_positions_per_log_size[&log_size],
-                &mut queried_values,
-                n_columns_per_log_size
-                    .as_ref()
-                    .map(|colums_log_sizes| *colums_log_sizes.get(&log_size).unwrap_or(&0)),
+                &query_domain_per_log_size[&log_size],
+                &queried_valued_per_column,
             )
         })
         .collect()
@@ -134,34 +129,59 @@ pub fn fri_answers_for_log_size(
     log_size: u32,
     samples: &[&Vec<PointSample>],
     random_coeff: SecureField,
-    query_positions: &[usize],
-    queried_values: &mut TreeVec<impl Iterator<Item = BaseField>>,
-    n_columns: TreeVec<usize>,
-) -> Result<Vec<SecureField>, VerificationError> {
-    let sample_batches = ColumnSampleBatch::new_vec(samples);
-    // TODO(ilya): Is it ok to use the same `random_coeff` for all log sizes.
-    let quotient_constants = quotient_constants(&sample_batches, random_coeff);
+    query_domain: &SparseSubCircleDomain,
+    queried_values_per_column: &[&Vec<BaseField>],
+) -> Result<SparseCircleEvaluation, VerificationError> {
     let commitment_domain = CanonicCoset::new(log_size).circle_domain();
+    let sample_batches = ColumnSampleBatch::new_vec(samples);
+    for queried_values in queried_values_per_column {
+        if queried_values.len() != query_domain.flatten().len() {
+            return Err(VerificationError::InvalidStructure(
+                "Insufficient number of queried values".to_string(),
+            ));
+        }
+    }
+    let mut queried_values_per_column = queried_values_per_column
+        .iter()
+        .map(|q| q.iter())
+        .collect_vec();
 
-    let mut quotient_evals_at_queries = Vec::new();
-    for &query_position in query_positions {
-        let domain_point = commitment_domain.at(bit_reverse_index(query_position, log_size));
+    let mut evals = Vec::new();
+    for subdomain in query_domain.iter() {
+        let domain = subdomain.to_circle_domain(&commitment_domain);
+        let quotient_constants = quotient_constants(&sample_batches, random_coeff, domain);
+        let mut column_evals = Vec::new();
+        for queried_values in queried_values_per_column.iter_mut() {
+            let eval = CircleEvaluation::new(
+                domain,
+                queried_values.take(domain.size()).copied().collect_vec(),
+            );
+            column_evals.push(eval);
+        }
 
-        let queried_values_at_row = queried_values
-            .as_mut()
-            .zip_eq(n_columns.as_ref())
-            .map(|(queried_values, n_columns)| queried_values.take(*n_columns).collect())
-            .flatten();
-
-        quotient_evals_at_queries.push(accumulate_row_quotients(
-            &sample_batches,
-            &queried_values_at_row,
-            &quotient_constants,
-            domain_point,
-        ));
+        let mut values = Vec::new();
+        for row in 0..domain.size() {
+            let domain_point = domain.at(bit_reverse_index(row, log_size));
+            let value = accumulate_row_quotients(
+                &sample_batches,
+                &column_evals.iter().collect_vec(),
+                &quotient_constants,
+                row,
+                domain_point,
+            );
+            values.push(value);
+        }
+        let eval = CircleEvaluation::new(domain, values);
+        evals.push(eval);
     }
 
-    Ok(quotient_evals_at_queries)
+    let res = SparseCircleEvaluation::new(evals);
+    if !queried_values_per_column.iter().all(|x| x.is_empty()) {
+        return Err(VerificationError::InvalidStructure(
+            "Too many queried values".to_string(),
+        ));
+    }
+    Ok(res)
 }
 
 #[cfg(test)]

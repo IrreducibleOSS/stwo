@@ -10,10 +10,10 @@ use rayon::prelude::*;
 use super::{
     compute_first_twiddles, mul_twiddle, transpose_vecs, CACHED_FFT_LOG_SIZE, MIN_FFT_LOG_SIZE,
 };
-use crate::core::backend::cpu::bit_reverse;
 use crate::core::backend::simd::m31::{PackedBaseField, LOG_N_LANES};
 use crate::core::backend::simd::utils::{UnsafeConst, UnsafeMut};
 use crate::core::circle::Coset;
+use crate::core::utils::bit_reverse;
 use crate::parallel_iter;
 
 /// Performs a Circle Fast Fourier Transform (CFFT) on the given values.
@@ -624,8 +624,8 @@ mod tests {
         let mut res = values;
         unsafe {
             fft3(
-                transmute::<*const PackedBaseField, *const u32>(res.as_ptr()),
-                transmute::<*mut PackedBaseField, *mut u32>(res.as_mut_ptr()),
+                transmute(res.as_ptr()),
+                transmute(res.as_mut_ptr()),
                 0,
                 LOG_N_LANES as usize,
                 twiddles0_dbl,
@@ -709,8 +709,8 @@ mod tests {
             let mut res = values.iter().copied().collect::<BaseColumn>();
             unsafe {
                 fft_lower_with_vecwise(
-                    transmute::<*const PackedBaseField, *const u32>(res.data.as_ptr()),
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
+                    transmute(res.data.as_ptr()),
+                    transmute(res.data.as_mut_ptr()),
                     &twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec(),
                     log_size as usize,
                     log_size as usize,
@@ -731,13 +731,10 @@ mod tests {
 
             let mut res = values.iter().copied().collect::<BaseColumn>();
             unsafe {
-                transpose_vecs(
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
-                    log_size as usize - 4,
-                );
+                transpose_vecs(transmute(res.data.as_mut_ptr()), log_size as usize - 4);
                 fft(
-                    transmute::<*const PackedBaseField, *const u32>(res.data.as_ptr()),
-                    transmute::<*mut PackedBaseField, *mut u32>(res.data.as_mut_ptr()),
+                    transmute(res.data.as_ptr()),
+                    transmute(res.data.as_mut_ptr()),
                     &twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec(),
                     log_size as usize,
                 );

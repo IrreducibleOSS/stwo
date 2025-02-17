@@ -1,16 +1,17 @@
 use itertools::Itertools;
 
 use super::{CanonicCoset, CircleDomain, CircleEvaluation, CirclePoly};
-use crate::core::backend::{Col, ColumnOps};
+use crate::core::backend::Col;
 use crate::core::circle::{CirclePoint, Coset};
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
+use crate::core::fields::FieldOps;
 use crate::core::poly::twiddles::TwiddleTree;
 use crate::core::poly::BitReversedOrder;
 use crate::core::ColumnVec;
 
 /// Operations on BaseField polynomials.
-pub trait PolyOps: ColumnOps<BaseField> + Sized {
+pub trait PolyOps: FieldOps<BaseField> + Sized {
     // TODO(alont): Use a column instead of this type.
     /// The type for precomputed twiddles.
     type Twiddles;
@@ -56,7 +57,7 @@ pub trait PolyOps: ColumnOps<BaseField> + Sized {
     ) -> CircleEvaluation<Self, BaseField, BitReversedOrder>;
 
     fn evaluate_polynomials(
-        polynomials: &ColumnVec<CirclePoly<Self>>,
+        polynomials: &mut ColumnVec<CirclePoly<Self>>,
         log_blowup_factor: u32,
         twiddles: &TwiddleTree<Self>,
     ) -> Vec<CircleEvaluation<Self, BaseField, BitReversedOrder>> {

@@ -1,11 +1,9 @@
 use std::ops::Mul;
 
-use super::logup::LogupAtRow;
-use super::{EvalAtRow, INTERACTION_TRACE_IDX};
+use super::EvalAtRow;
 use crate::core::air::accumulation::PointEvaluationAccumulator;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::SECURE_EXTENSION_DEGREE;
-use crate::core::lookups::utils::Fraction;
 use crate::core::pcs::TreeVec;
 use crate::core::ColumnVec;
 
@@ -15,15 +13,12 @@ pub struct PointEvaluator<'a> {
     pub evaluation_accumulator: &'a mut PointEvaluationAccumulator,
     pub col_index: Vec<usize>,
     pub denom_inverse: SecureField,
-    pub logup: LogupAtRow<Self>,
 }
 impl<'a> PointEvaluator<'a> {
     pub fn new(
         mask: TreeVec<ColumnVec<&'a Vec<SecureField>>>,
         evaluation_accumulator: &'a mut PointEvaluationAccumulator,
         denom_inverse: SecureField,
-        log_size: u32,
-        claimed_sum: SecureField,
     ) -> Self {
         let col_index = vec![0; mask.len()];
         Self {
@@ -31,11 +26,10 @@ impl<'a> PointEvaluator<'a> {
             evaluation_accumulator,
             col_index,
             denom_inverse,
-            logup: LogupAtRow::new(INTERACTION_TRACE_IDX, claimed_sum, log_size),
         }
     }
 }
-impl EvalAtRow for PointEvaluator<'_> {
+impl<'a> EvalAtRow for PointEvaluator<'a> {
     type F = SecureField;
     type EF = SecureField;
 
@@ -60,6 +54,4 @@ impl EvalAtRow for PointEvaluator<'_> {
     fn combine_ef(values: [Self::F; SECURE_EXTENSION_DEGREE]) -> Self::EF {
         SecureField::from_partial_evals(values)
     }
-
-    super::logup_proxy!();
 }

@@ -6,10 +6,10 @@ use educe::Educe;
 use super::{CanonicCoset, CircleDomain, CirclePoly, PolyOps};
 use crate::core::backend::cpu::CpuCircleEvaluation;
 use crate::core::backend::simd::SimdBackend;
-use crate::core::backend::{Col, Column, ColumnOps, CpuBackend};
+use crate::core::backend::{Col, Column, CpuBackend};
 use crate::core::circle::{CirclePointIndex, Coset};
 use crate::core::fields::m31::BaseField;
-use crate::core::fields::ExtensionOf;
+use crate::core::fields::{ExtensionOf, FieldOps};
 use crate::core::poly::twiddles::TwiddleTree;
 use crate::core::poly::{BitReversedOrder, NaturalOrder};
 use crate::core::utils::bit_reverse_index;
@@ -18,13 +18,13 @@ use crate::core::utils::bit_reverse_index;
 /// The values are ordered according to the [CircleDomain] ordering.
 #[derive(Educe)]
 #[educe(Clone, Debug)]
-pub struct CircleEvaluation<B: ColumnOps<F>, F: ExtensionOf<BaseField>, EvalOrder = NaturalOrder> {
+pub struct CircleEvaluation<B: FieldOps<F>, F: ExtensionOf<BaseField>, EvalOrder = NaturalOrder> {
     pub domain: CircleDomain,
     pub values: Col<B, F>,
     _eval_order: PhantomData<EvalOrder>,
 }
 
-impl<B: ColumnOps<F>, F: ExtensionOf<BaseField>, EvalOrder> CircleEvaluation<B, F, EvalOrder> {
+impl<B: FieldOps<F>, F: ExtensionOf<BaseField>, EvalOrder> CircleEvaluation<B, F, EvalOrder> {
     pub fn new(domain: CircleDomain, values: Col<B, F>) -> Self {
         assert_eq!(domain.size(), values.len());
         Self {
@@ -38,7 +38,7 @@ impl<B: ColumnOps<F>, F: ExtensionOf<BaseField>, EvalOrder> CircleEvaluation<B, 
 // Note: The concrete implementation of the poly operations is in the specific backend used.
 // For example, the CPU backend implementation is in `src/core/backend/cpu/poly.rs`.
 // TODO(first) Remove NaturalOrder.
-impl<F: ExtensionOf<BaseField>, B: ColumnOps<F>> CircleEvaluation<B, F, NaturalOrder> {
+impl<F: ExtensionOf<BaseField>, B: FieldOps<F>> CircleEvaluation<B, F, NaturalOrder> {
     // TODO(alont): Remove. Is this even used.
     pub fn get_at(&self, point_index: CirclePointIndex) -> F {
         self.values
@@ -95,7 +95,7 @@ impl<B: PolyOps> CircleEvaluation<B, BaseField, BitReversedOrder> {
     }
 }
 
-impl<B: ColumnOps<F>, F: ExtensionOf<BaseField>> CircleEvaluation<B, F, BitReversedOrder> {
+impl<B: FieldOps<F>, F: ExtensionOf<BaseField>> CircleEvaluation<B, F, BitReversedOrder> {
     pub fn bit_reverse(mut self) -> CircleEvaluation<B, F, NaturalOrder> {
         B::bit_reverse_column(&mut self.values);
         CircleEvaluation::new(self.domain, self.values)
@@ -111,14 +111,14 @@ impl<B: ColumnOps<F>, F: ExtensionOf<BaseField>> CircleEvaluation<B, F, BitRever
 
 impl<F: ExtensionOf<BaseField>, EvalOrder> CircleEvaluation<SimdBackend, F, EvalOrder>
 where
-    SimdBackend: ColumnOps<F>,
+    SimdBackend: FieldOps<F>,
 {
     pub fn to_cpu(&self) -> CircleEvaluation<CpuBackend, F, EvalOrder> {
         CircleEvaluation::new(self.domain, self.values.to_cpu())
     }
 }
 
-impl<B: ColumnOps<F>, F: ExtensionOf<BaseField>, EvalOrder> Deref
+impl<B: FieldOps<F>, F: ExtensionOf<BaseField>, EvalOrder> Deref
     for CircleEvaluation<B, F, EvalOrder>
 {
     type Target = Col<B, F>;
@@ -146,7 +146,7 @@ impl<'a, F: ExtensionOf<BaseField>> CosetSubEvaluation<'a, F> {
     }
 }
 
-impl<F: ExtensionOf<BaseField>> Index<isize> for CosetSubEvaluation<'_, F> {
+impl<'a, F: ExtensionOf<BaseField>> Index<isize> for CosetSubEvaluation<'a, F> {
     type Output = F;
 
     fn index(&self, index: isize) -> &Self::Output {
@@ -156,7 +156,7 @@ impl<F: ExtensionOf<BaseField>> Index<isize> for CosetSubEvaluation<'_, F> {
     }
 }
 
-impl<F: ExtensionOf<BaseField>> Index<usize> for CosetSubEvaluation<'_, F> {
+impl<'a, F: ExtensionOf<BaseField>> Index<usize> for CosetSubEvaluation<'a, F> {
     type Output = F;
 
     fn index(&self, index: usize) -> &Self::Output {
