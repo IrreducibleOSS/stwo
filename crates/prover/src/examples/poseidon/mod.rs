@@ -534,15 +534,7 @@ mod tests {
     #[cfg(feature = "tracing")]
     #[test]
     fn trace_simd_poseidon_prove() {
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::Registry;
-
-        use crate::tracing::SpanAccumulator;
-
-        let collector = SpanAccumulator::default();
-        let layer = collector.clone();
-        let subscriber = Registry::default().with(layer);
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = tracing_profile::init_tracing().unwrap();
 
         let log_n_instances = env::var("LOG_N_INSTANCES")
             .unwrap_or_else(|_| "10".to_string())
@@ -555,9 +547,5 @@ mod tests {
 
         // Prove.
         let _ = prove_poseidon(log_n_instances, config);
-
-        let csv = collector.export_csv();
-
-        println!("{}", csv);
     }
 }
