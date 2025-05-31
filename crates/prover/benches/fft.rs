@@ -101,29 +101,32 @@ pub fn simd_ifft_parts(c: &mut Criterion) {
 }
 
 pub fn simd_rfft(c: &mut Criterion) {
-    const LOG_SIZE: u32 = 20;
+    let mut group = c.benchmark_group("rffts");
+    
+    for log_size in 16..=28 {
+        let domain = CanonicCoset::new(log_size).circle_domain();
+        let twiddle_dbls = get_twiddle_dbls(domain.half_coset);
+        let twiddle_dbls_refs = twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec();
+        let values: BaseColumn = (0..domain.size()).map(BaseField::from).collect();
 
-    let domain = CanonicCoset::new(LOG_SIZE).circle_domain();
-    let twiddle_dbls = get_twiddle_dbls(domain.half_coset);
-    let twiddle_dbls_refs = twiddle_dbls.iter().map(|x| x.as_slice()).collect_vec();
-    let values: BaseColumn = (0..domain.size()).map(BaseField::from).collect();
+        group.throughput(Throughput::Bytes(size_of_val(&*values.data) as u64));
+        group.bench_function(BenchmarkId::new("simd rfft", log_size), |b| {
+            b.iter_with_large_drop(|| unsafe {
+                let mut target = Vec::<PackedBaseField>::with_capacity(values.data.len());
+                #[allow(clippy::uninit_vec)]
+                target.set_len(values.data.len());
 
-    c.bench_function("simd rfft 20bit", |b| {
-        b.iter_with_large_drop(|| unsafe {
-            let mut target = Vec::<PackedBaseField>::with_capacity(values.data.len());
-            #[allow(clippy::uninit_vec)]
-            target.set_len(values.data.len());
-
-            fft(
-                black_box(transmute::<*const PackedBaseField, *const u32>(
-                    values.data.as_ptr(),
-                )),
-                transmute::<*mut PackedBaseField, *mut u32>(target.as_mut_ptr()),
-                black_box(&twiddle_dbls_refs),
-                black_box(LOG_SIZE as usize),
-            )
+                fft(
+                    black_box(transmute::<*const PackedBaseField, *const u32>(
+                        values.data.as_ptr(),
+                    )),
+                    transmute::<*mut PackedBaseField, *mut u32>(target.as_mut_ptr()),
+                    black_box(&twiddle_dbls_refs),
+                    black_box(log_size as usize),
+                )
+            });
         });
-    });
+    }
 }
 
 criterion_group!(
