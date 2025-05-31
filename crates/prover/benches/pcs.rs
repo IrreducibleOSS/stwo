@@ -1,6 +1,6 @@
 use std::iter;
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use stwo_prover::core::backend::simd::SimdBackend;
@@ -36,24 +36,29 @@ fn benched_fn<B: BackendForChannel<Blake2sMerkleChannel>>(
 }
 
 fn bench_pcs<B: BackendForChannel<Blake2sMerkleChannel>>(c: &mut Criterion, id: &str) {
-    let small_domain = CanonicCoset::new(LOG_COSET_SIZE);
-    let big_domain = CanonicCoset::new(LOG_COSET_SIZE + LOG_BLOWUP_FACTOR);
-    let twiddles = B::precompute_twiddles(big_domain.half_coset());
-    let mut channel = Blake2sChannel::default();
-    let mut rng = SmallRng::seed_from_u64(0);
+    let mut group = c.benchmark_group(format!("{id} polynomial commitment"));
 
-    let evals: Vec<CircleEvaluation<B, BaseField, BitReversedOrder>> = iter::repeat_with(|| {
-        CircleEvaluation::new(
-            small_domain.circle_domain(),
-            (0..1 << LOG_COSET_SIZE).map(|_| rng.gen()).collect(),
-        )
-    })
-    .take(N_POLYS)
-    .collect();
+    for log_coset_size in [16, 20, 24] {
+        let small_domain = CanonicCoset::new(log_coset_size);
+        let big_domain = CanonicCoset::new(log_coset_size + LOG_BLOWUP_FACTOR);
+        let twiddles = B::precompute_twiddles(big_domain.half_coset());
+        let mut channel = Blake2sChannel::default();
+        let mut rng = SmallRng::seed_from_u64(0);
 
-    c.bench_function(
-        &format!("{id} polynomial commitment 2^{LOG_COSET_SIZE}"),
-        |b| {
+        let evals: Vec<CircleEvaluation<B, BaseField, BitReversedOrder>> =
+            iter::repeat_with(|| {
+                CircleEvaluation::new(
+                    small_domain.circle_domain(),
+                    (0..1 << log_coset_size).map(|_| rng.gen()).collect(),
+                )
+            })
+            .take(N_POLYS)
+            .collect();
+
+        group.throughput(Throughput::Bytes(
+            (size_of::<BaseField>() * N_POLYS << log_coset_size) as u64,
+        ));
+        group.bench_function(&format!("2^{log_coset_size}"), |b| {
             b.iter_batched(
                 || evals.clone(),
                 |evals| {
@@ -65,8 +70,8 @@ fn bench_pcs<B: BackendForChannel<Blake2sMerkleChannel>>(c: &mut Criterion, id: 
                 },
                 BatchSize::LargeInput,
             );
-        },
-    );
+        });
+    }
 }
 
 fn pcs_benches(c: &mut Criterion) {
